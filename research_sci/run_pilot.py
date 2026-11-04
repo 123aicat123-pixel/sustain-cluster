@@ -16,6 +16,7 @@ import math
 import random
 import statistics
 import tempfile
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +24,9 @@ import yaml
 
 from research_sci.policies import SpatialPolicy
 from research_sci.temporal import TemporalPolicy
-from research_sci.queue_risk import QueueRiskCarbonPolicy
+from research_sci.queue_risk import QueueRiskCarbonPolicy, predict_finish
+from research_sci.prediction_audit import summarize_forecasts
+from data.network_cost.network_delay import get_transmission_delay
 from train_SAC_agent import make_env
 
 
@@ -33,7 +36,8 @@ DC_CONFIG = ROOT / "configs/env/datacenters.yaml"
 REWARD_CONFIG = ROOT / "configs/env/reward_config.yaml"
 
 
-def run_once(name, seed, steps, drain_steps, capacity_scale=1.0):
+def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
+             audit_predictions=False, audit_dir=None):
     if steps < 1 or drain_steps < 1:
         raise ValueError("Both admission and drain steps must be positive")
     if not (0 < capacity_scale <= 1.0):
@@ -102,8 +106,18 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0):
             }
             dispatched = set()
             finished = set()
+            first_dispatch_forecast = {}
+            dc_by_id = {dc.dc_id: dc for dc in env.cluster_manager.datacenters.values()}
 
             for _ in range(steps + drain_steps):
+                # This is observable at decision time: existing transit plus
+                # earlier commitments in the same actions batch. Never future arrivals.
+                commitments = {dc_id: [] for dc_id in dc_by_id}
+                for eta, transit_task, dc_name in env.in_transit_tasks:
+                    transit_dc_id = env.cluster_manager.datacenters[dc_name].dc_id
+                    commitments[transit_dc_id].append((eta, transit_task))
+                if isinstance(policy, QueueRiskCarbonPolicy):
+                    policy.set_visible_commitments(commitments)
                 tasks = list(env.current_tasks)
                 actions = []
                 for task in tasks:
@@ -121,6 +135,37 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0):
                     actions.append(id_to_action[dc_id])
                     result["fallback_to_origin"] += int(fallback)
                     dispatched.add(task)
+                    if task in first_dispatch_forecast:
+                        raise AssertionError("Task dispatched twice")
+                    # SLA-expired jobs are force-routed to origin by upstream
+                    # environment and bypass the normal network action.
+                    forced_origin = env.current_time > task.sla_deadline
+                    effective_dc_id = task.origin_dc_id if forced_origin else dc_id
+                    effective_dc = dc_by_id[effective_dc_id]
+                    if forced_origin:
+                        arrival_eta = env.current_time
+                        forecast = None
+                    else:
+                        origin = env.cluster_manager.get_dc_location(task.origin_dc_id)
+                        delay = float(get_transmission_delay(
+                            origin, effective_dc.location,
+                            env.cluster_manager.cloud_provider, task.bandwidth_gb))
+                        if not math.isfinite(delay) or delay < 0:
+                            raise AssertionError("Invalid transmission delay")
+                        arrival_eta = env.current_time + timedelta(seconds=delay)
+                        if audit_predictions:
+                            tick_seconds = int(env.time_step.total_seconds())
+                            arrival_ticks = max(1, math.ceil(delay / tick_seconds))
+                            forecast = predict_finish(
+                                task, effective_dc, env.current_time, arrival_ticks,
+                                step_seconds=tick_seconds,
+                                known_arrivals=commitments[effective_dc_id],
+                            )
+                        else:
+                            forecast = None
+                    if audit_predictions:
+                        first_dispatch_forecast[task] = forecast
+                    commitments[effective_dc_id].append((arrival_eta, task))
 
                 _, _, terminated, truncated, info = env.step(actions)
 
@@ -170,6 +215,21 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0):
             result["in_transit_last"] = len(in_transit)
             result["waiting_last"] = len(waiting)
             result["deferral_eligible"] = getattr(policy, "ready_for_wait", 0)
+            if audit_predictions:
+                metrics, forecast_rows = summarize_forecasts(
+                    first_dispatch_forecast, finished, buffer_minutes=30)
+                if metrics["forecast_records"] != len(dispatched):
+                    raise AssertionError("Missing first-dispatch forecast")
+                result.update(metrics)
+                if audit_dir is not None:
+                    audit_dir = Path(audit_dir)
+                    audit_dir.mkdir(parents=True, exist_ok=True)
+                    forecast_path = audit_dir / f"{name}_seed{seed}.jsonl"
+                    forecast_path.write_text(
+                        "".join(json.dumps(record, allow_nan=False) + "\n"
+                                for record in forecast_rows),
+                        encoding="utf-8"
+                    )
             result["estimated_queue_actions"] = getattr(policy, "estimated_queuing_actions", 0)
             result["queue_no_forecast"] = getattr(policy, "no_forecast", 0)
             result["unfinished_at_horizon"] = len(dispatched - finished)
@@ -200,6 +260,8 @@ def main():
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--drain-steps", type=int, default=24)
     parser.add_argument("--seeds", nargs="+", type=int, default=[42])
+    parser.add_argument("--audit-predictions", action="store_true",
+                        help="Audit first-dispatch finish forecasts against observed completions")
     parser.add_argument("--capacity-scale", type=float, default=1.0,
                         help="Scale DC resource totals uniformly; research stress test only")
     parser.add_argument("--policies", nargs="+",
@@ -215,7 +277,13 @@ def main():
     rows = []
     for seed in args.seeds:
         for policy in args.policies:
-            row = run_once(policy, seed, args.steps, args.drain_steps, capacity_scale=args.capacity_scale)
+            audit_dir = args.output.parent / f"{args.output.stem}_forecasts" if args.audit_predictions else None
+            row = run_once(
+                policy, seed, args.steps, args.drain_steps,
+                capacity_scale=args.capacity_scale,
+                audit_predictions=args.audit_predictions,
+                audit_dir=audit_dir
+            )
             rows.append(row)
             print(json.dumps({
                 "seed": seed, "policy": policy,
