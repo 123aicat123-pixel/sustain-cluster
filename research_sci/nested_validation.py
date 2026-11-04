@@ -108,7 +108,28 @@ def run_experiment(seeds, output, cal_steps=16, gap_val=128,
     for seed in seeds:
         audit_pair(paired[(seed,"fixed_30")],paired[(seed,selected)],
                    selected,plan["test_gap"])
+    baseline_rows=[paired[(seed,"fixed_30")] for seed in seeds]
+    selected_rows=[paired[(seed,selected)] for seed in seeds]
+    equal_finished=all(
+        a["test_tasks_finished"] == b["test_tasks_finished"]
+        for a,b in zip(baseline_rows,selected_rows)
+    )
+    test_diagnostic={
+        "equal_completed_work_each_seed":equal_finished,
+        "baseline_mean_carbon_kg":sum(x["test_total_carbon_kg"] for x in baseline_rows)/len(seeds),
+        "selected_mean_carbon_kg":sum(x["test_total_carbon_kg"] for x in selected_rows)/len(seeds),
+        "baseline_mean_deadline_failures":sum(x["test_deadline_failures_including_overdue"] for x in baseline_rows)/len(seeds),
+        "selected_mean_deadline_failures":sum(x["test_deadline_failures_including_overdue"] for x in selected_rows)/len(seeds),
+        "comparison_interpretation":(
+            "equal completed work" if equal_finished
+            else "unequal completed work; carbon efficiency not directly comparable"
+        ),
+        "selection_not_updated_after_test":True,
+    }
+    print(json.dumps({"phase":"INDEPENDENT_TEST_SUMMARY",**test_diagnostic},
+                     allow_nan=False),flush=True)
     result={"plan":plan,"seeds":list(seeds),"selected_on_validation":selected,
+            "test_diagnostic":test_diagnostic,
             "selection_diagnostics":diagnostic,"validation_rows":validation,
             "heldout_rows":heldout,"holdout_used_in_selection":False,
             "validation_admissions_omitted_in_test_replay":True,
