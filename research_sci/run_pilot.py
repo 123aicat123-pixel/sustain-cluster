@@ -107,6 +107,7 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
             dispatched = set()
             finished = set()
             first_dispatch_forecast = {}
+            decision_buffers = {}
             calibrator = getattr(policy, "calibrator", None)
             record_predictions = audit_predictions or calibrator is not None
             dc_by_id = {dc.dc_id: dc for dc in env.cluster_manager.datacenters.values()}
@@ -172,6 +173,10 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
                             forecast = None
                     if record_predictions:
                         first_dispatch_forecast[task] = forecast
+                    if isinstance(policy, QueueRiskCarbonPolicy):
+                        if task not in policy.dispatch_margin_by_task:
+                            raise AssertionError("No frozen decision-time risk margin")
+                        decision_buffers[task] = policy.dispatch_margin_by_task[task]
                     commitments[effective_dc_id].append((arrival_eta, task))
 
                 _, _, terminated, truncated, info = env.step(actions)
@@ -244,7 +249,8 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
                 )
             if audit_predictions:
                 metrics, forecast_rows = summarize_forecasts(
-                    first_dispatch_forecast, finished, buffer_minutes=30)
+                    first_dispatch_forecast, finished, buffer_minutes=30,
+                    decision_buffers=decision_buffers)
                 if metrics["forecast_records"] != len(dispatched):
                     raise AssertionError("Missing first-dispatch forecast")
                 result.update(metrics)
@@ -329,7 +335,11 @@ def main():
                         "forecast_signed_bias_minutes", "forecast_mae_minutes",
                         "forecast_p90_abs_error_minutes", "forecast_buffer_coverage",
                         "forecast_predicted_safe_completed",
-                        "forecast_false_safe_completed", "forecast_false_safe_rate"
+                        "forecast_false_safe_completed", "forecast_false_safe_rate",
+                        "decision_margin_coverage_completed",
+                        "decision_margin_predicted_safe_completed",
+                        "decision_margin_false_safe_completed",
+                        "decision_margin_false_safe_rate_completed"
                     )
                 })
             if "calibration_buffer_last_minutes" in row:
