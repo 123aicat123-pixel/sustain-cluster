@@ -6,6 +6,12 @@ from types import SimpleNamespace
 from research_sci.temporal import TemporalPolicy
 
 
+class IdentityTask(SimpleNamespace):
+    """Mimics SustainCluster Task's identity-based hashing."""
+    __hash__ = object.__hash__
+    __eq__ = object.__eq__
+
+
 class FakeCenter:
     def __init__(self, dc_id, carbon):
         self.dc_id = dc_id
@@ -25,7 +31,7 @@ class TestTemporalPolicy(unittest.TestCase):
         self.dc = {"A": FakeCenter(1, 400)}
         self.cluster = SimpleNamespace(
             cloud_provider="aws", get_dc_location=lambda dc_id: "origin")
-        self.task = SimpleNamespace(
+        self.task = IdentityTask(
             origin_dc_id=1, duration=15, sla_deadline=self.now + timedelta(hours=4),
             bandwidth_gb=0,
         )
