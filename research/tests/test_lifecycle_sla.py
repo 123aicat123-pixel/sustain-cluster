@@ -97,7 +97,14 @@ class TestSLAFeasibleCarbonPolicy(unittest.TestCase):
     def test_when_none_meet_deadline_pick_earliest(self):
         policy = SLAPolicy(delay_fn=lambda a,b,c,d: 4000 if b == "far" else 30)
         policy.set_context(self.now, self.cm)
-        self.assertEqual(policy(self.task(deadline_mins=10), self.dcs), 2)
+        self.assertEqual(policy(self.task(deadline_mins=5), self.dcs), 2)
+
+    def test_local_zero_transfer_meets_tight_deadline(self):
+        policy = SLAPolicy(delay_fn=lambda a,b,c,d: 30)
+        policy.set_context(self.now, self.cm)
+        # Local: immediate 10 minute execution. Remote: >=15 minute transfer
+        # grid delay + 10 minute execution, too late for 10 minute deadline.
+        self.assertEqual(policy(self.task(deadline_mins=10, duration=10),self.dcs),2)
 
     def test_excludes_currently_unschedulable_dc(self):
         self.dcs["DC10"].can_schedule=lambda task: False
