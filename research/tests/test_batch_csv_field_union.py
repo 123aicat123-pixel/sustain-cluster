@@ -3,7 +3,7 @@ import csv
 import io
 import unittest
 
-from research.batch_unified_baselines import union_csv_fieldnames
+from research.csv_export_schema import union_csv_fieldnames
 
 
 class TestUnifiedCsvColumns(unittest.TestCase):
