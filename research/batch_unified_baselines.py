@@ -23,6 +23,9 @@ METRICS = (
     "pending_last", "running_last", "in_transit_last",
     "undispatched_at_horizon", "fallback_assignments",
     "unfinished_dispatched", "unfinished_overdue_at_horizon",
+    "task_audit_sla_violation_rate", "task_audit_response_mean_minutes",
+    "task_audit_response_p95_minutes", "task_audit_wait_p95_minutes",
+    "task_audit_total_tardiness_minutes",
 )
 
 
@@ -34,7 +37,10 @@ def summarize(results):
     for policy, runs in groups.items():
         metrics = {}
         for metric in METRICS:
-            values = [float(r[metric]) for r in runs]
+            values = [float(r[metric]) for r in runs if r[metric] is not None]
+            if not values:
+                metrics[metric] = {"mean": None, "std": None, "min": None, "max": None}
+                continue
             metrics[metric] = {
                 "mean": statistics.mean(values),
                 "std": statistics.stdev(values) if len(values)>1 else None,
@@ -63,11 +69,12 @@ def main():
     if not args.policies or len(set(args.policies)) != len(args.policies):
         parser.error("--policies must be nonempty and unique")
     results = []
+    completed_rows = []
     # Run every policy with each identical seed, avoiding random generator
     # coupling between consecutive policies.
     for seed in args.seeds:
         for policy in args.policies:
-            row = run(policy, seed, args.steps, drain_steps=args.drain_steps)
+            row = run(policy, seed, args.steps, drain_steps=args.drain_steps, completed_records=completed_rows)
             results.append(row)
             print(f"completed: seed={seed} policy={policy} "
                   f"cost={row['reported_total_cost_usd']:.3f} "
@@ -81,14 +88,20 @@ def main():
     jsonpath=Path(str(prefix)+".json")
     csvpath=Path(str(prefix)+".csv")
     summarypath=Path(str(prefix)+"_summary.json")
+    taskspath=Path(str(prefix)+"_completed_tasks.csv")
     jsonpath.write_text(json.dumps(results,indent=2,allow_nan=False),encoding="utf8")
     with csvpath.open("w",newline="",encoding="utf8") as f:
         writer=csv.DictWriter(f,fieldnames=list(results[0]))
         writer.writeheader()
         writer.writerows(results)
+    if completed_rows:
+        with taskspath.open("w", newline="", encoding="utf8") as f:
+            detail=csv.DictWriter(f,fieldnames=list(completed_rows[0]))
+            detail.writeheader()
+            detail.writerows(completed_rows)
     summary=summarize(results)
     summarypath.write_text(json.dumps(summary,indent=2,allow_nan=False),encoding="utf8")
-    print("Wrote",str(jsonpath),str(csvpath),str(summarypath))
+    print("Wrote",str(jsonpath),str(csvpath),str(summarypath),str(taskspath))
     print("CAUTION: any unfinished tasks, including overdue ones, are separately counted; observational cost/emissions continue during drain. Exploration only.")
 
 
