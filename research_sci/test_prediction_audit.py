@@ -54,6 +54,34 @@ class PredictionAuditTests(unittest.TestCase):
         self.assertEqual(metrics["forecast_completed_evaluable"], 0)
         self.assertIsNone(rows[0]["predicted_met_sla"])
 
+    def test_frozen_decision_margin_coverage_and_false_safe(self):
+        one = Task("late", self.now + timedelta(minutes=55),
+                   self.now + timedelta(minutes=70))
+        two = Task("ok", self.now + timedelta(minutes=110),
+                   self.now + timedelta(minutes=65))
+        pred = {
+            one: self.now + timedelta(minutes=40),
+            two: self.now + timedelta(minutes=40),
+        }
+        stats, rows = summarize_forecasts(
+            pred, [one, two], buffer_minutes=30,
+            decision_buffers={one: 10, two: 35},
+        )
+        self.assertEqual(stats["decision_margin_completed_evaluable"], 2)
+        self.assertEqual(stats["decision_margin_covered_completed"], 1)
+        self.assertEqual(stats["decision_margin_false_safe_completed"], 1)
+        self.assertEqual(stats["decision_margin_predicted_safe_completed"], 2)
+        self.assertAlmostEqual(stats["decision_margin_false_safe_rate_completed"], .5)
+        self.assertEqual(rows[0]["decision_margin_minutes"], 10)
+
+    def test_invalid_decision_margin_rejected(self):
+        task = Task("bad-margin", self.now + timedelta(minutes=80),
+                    self.now + timedelta(minutes=50))
+        with self.assertRaises(ValueError):
+            summarize_forecasts(
+                {task: self.now}, [task], decision_buffers={task: -1},
+            )
+
     def test_no_records_has_defined_empty_summary(self):
         metrics, rows = summarize_forecasts({}, [])
         self.assertEqual(rows, [])
