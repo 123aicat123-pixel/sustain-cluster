@@ -132,3 +132,27 @@ jobs:
           name: sci-carbon-nested-validation
           path: research_sci/results/nested_validation.*
           if-no-files-found: warn
+
+  temporal-robustness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: |
+          unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Validate once then test two later disjoint time intervals
+        run: |
+          python -m research_sci.temporal_robustness --seeds 1 42 --test-start-ticks 288 448 --capacity-scale 0.02 --output research_sci/results/temporal_robustness.json
+      - name: Upload per-window generalization evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sci-carbon-temporal-robustness
+          path: research_sci/results/temporal_robustness*
+          if-no-files-found: warn

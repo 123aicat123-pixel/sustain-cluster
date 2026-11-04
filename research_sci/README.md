@@ -291,3 +291,33 @@ and heldout test. This avoids the previous test-set selection issue,
 but two seeds, a single synthetic-capacity setting and a deliberately
 gapped simulation remain **exploratory** and cannot certify SCI
 significance, generalization or SLA probability bounds.
+
+## Predeclared temporal robustness (two held-out windows)
+
+`temporal_robustness.py` reuses the same validation-only choice, then
+freezes it **once** before observing either held-out window. It tests
+this single margin on **two non-overlapping later time intervals** (by
+default starts 288 and 448 simulator ticks after the common start). A
+fixed 7-day simulator horizon keeps initial workload generation and
+training-prefix configuration identical across all replays.
+
+Each test window is a *separate counterfactual replay* starting from the
+same historical training prefix: test #2 intentionally excludes both the
+validation cohort and test #1 admissions. This is not a continuous
+production trace, and the two windows share a workload source, seeds
+and calibrator. Validation selection NEVER sees either held-out outcome.
+Every paired replay verifies matching training-task fingerprints, training
+routes, test admission fingerprints and completed-work counts.
+
+```bash
+python -m research_sci.temporal_robustness --seeds 1 42 \\
+  --test-start-ticks 288 448 --capacity-scale 0.02 \\
+  --output research_sci/results/temporal_robustness.json
+```
+
+CSV and JSON report actual SLA failures, fully completed work, carbon,
+positive/negative paired carbon changes per seed and window. A favorable
+mean is not a significance claim, and neither an expired or vacuous safe
+set nor favorable outcomes in just one window are treated as robust risk
+control. Generalization still requires independent workloads, more time
+windows, more seeds and realistic hardware and arrival pressure.

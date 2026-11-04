@@ -66,7 +66,7 @@ def _signature(items):
     return hashlib.sha256(json.dumps(items, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _create_env(seed, total_steps, capacity_scale, scratch):
+def _create_env(seed, total_steps, capacity_scale, scratch, sim_duration_days=None):
     # Defer simulator and ML dependency imports: lightweight contract tests
     # run on GitHub Actions without installing 3rd-party packages.
     import numpy as np
@@ -75,6 +75,12 @@ def _create_env(seed, total_steps, capacity_scale, scratch):
 
     if not (0 < capacity_scale <= 1):
         raise ValueError("capacity_scale must lie in (0, 1]")
+    required_days = math.ceil((total_steps + 1) / 96)
+    if sim_duration_days is not None and (
+        not isinstance(sim_duration_days, int)
+        or sim_duration_days < required_days or sim_duration_days > 7
+    ):
+        raise ValueError("Fixed simulator duration must cover the entire experiment")
     random.seed(seed)
     np.random.seed(seed)
     config = copy.deepcopy(yaml.safe_load(CONFIG.read_text(encoding="utf-8")))
@@ -85,7 +91,8 @@ def _create_env(seed, total_steps, capacity_scale, scratch):
         "disable_defer_action": False,
         "shuffle_datacenters": False,
         "use_tensorboard": False,
-        "duration_days": max(4, math.ceil((total_steps + 1) / 96)),
+        "duration_days": (sim_duration_days if sim_duration_days is not None
+                          else max(4, required_days)),
     })
     cfg_path = scratch / "simulation.yaml"
     cfg_path.write_text(yaml.safe_dump(config), encoding="utf-8")
@@ -106,7 +113,7 @@ def _create_env(seed, total_steps, capacity_scale, scratch):
 
 def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             test_steps=16, drain_steps=96, capacity_scale=0.02,
-            alpha=0.1, min_samples=20):
+            alpha=0.1, min_samples=20, sim_duration_days=None):
     if treatment not in TREATMENTS:
         raise ValueError(f"Unknown treatment {treatment}")
     total_steps = calibration_steps + gap_steps + test_steps + drain_steps
@@ -118,7 +125,8 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
     from data.network_cost.network_delay import get_transmission_delay
 
     with tempfile.TemporaryDirectory(prefix="sci_chronological_") as tmp:
-        env = _create_env(seed, total_steps, capacity_scale, Path(tmp))
+        env = _create_env(seed, total_steps, capacity_scale, Path(tmp),
+                          sim_duration_days=sim_duration_days)
         try:
             dt = env.time_step
             t0 = env.start_time
