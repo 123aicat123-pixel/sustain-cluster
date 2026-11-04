@@ -16,7 +16,7 @@ _RESOURCE_KEYS = ("cores_req", "gpu_req", "mem_req")
 _AVAILABLE_KEYS = ("available_cores", "available_gpus", "available_mem")
 
 
-def predict_finish(task, dc, now, arrival_ticks, step_seconds=900, max_ticks=192):
+def predict_finish(task, dc, now, arrival_ticks, step_seconds=900, max_ticks=192, known_arrivals=()):
     """Predict completion from observed FIFO queue and running allocations.
 
     Returns None if target cannot be scheduled within max_ticks. The discrete
@@ -36,6 +36,16 @@ def predict_finish(task, dc, now, arrival_ticks, step_seconds=900, max_ticks=192
             raise ValueError("Running task missing finish_time")
         running.append((finish, [float(getattr(existing, key)) for key in _RESOURCE_KEYS]))
     waiting = deque(dc.pending_tasks)
+    # Commitments include already-in-transit jobs and earlier selections
+    # in this very same decision batch. Arrival timestamps are observed or
+    # computed from known transmission delay, never future workload arrivals.
+    arrivals = sorted(known_arrivals, key=lambda x: x[0])
+    seen = {task}
+    for _, known_task in arrivals:
+        if known_task in seen:
+            raise AssertionError("Duplicate target / known arrival in forecast")
+        seen.add(known_task)
+    arrival_index = 0
     time_delta = timedelta(seconds=step_seconds)
     for tick in range(max_ticks + 1):
         tick_time = now + tick * time_delta
@@ -47,6 +57,9 @@ def predict_finish(task, dc, now, arrival_ticks, step_seconds=900, max_ticks=192
             else:
                 next_running.append((end, requirements))
         running = next_running
+        while arrival_index < len(arrivals) and arrivals[arrival_index][0] <= tick_time:
+            waiting.append(arrivals[arrival_index][1])
+            arrival_index += 1
         if tick == arrival_ticks:
             waiting.append(task)
         queue_size = len(waiting)
@@ -95,6 +108,11 @@ class QueueRiskCarbonPolicy:
         self.ready_for_wait = 0
         self.estimated_queuing_actions = 0
         self.no_forecast = 0
+        self.known_arrivals_by_dc = {}
+
+    def set_visible_commitments(self, known_arrivals_by_dc):
+        """Visible in-transit and same-batch committed routes only."""
+        self.known_arrivals_by_dc = known_arrivals_by_dc
 
     def _observe(self, datacenters, now):
         if self.last_observed_time == now:
@@ -122,7 +140,10 @@ class QueueRiskCarbonPolicy:
             if not math.isfinite(delay) or delay < 0:
                 raise ValueError("Invalid transmission delay")
             ticks = max(1, math.ceil(delay / step_seconds))
-            finish = predict_finish(task, dc, current_time, ticks, step_seconds)
+            finish = predict_finish(
+                task, dc, current_time, ticks, step_seconds,
+                known_arrivals=self.known_arrivals_by_dc.get(dc.dc_id, ())
+            )
             if finish is None:
                 continue
             carbon = float(dc.get_current_carbon_intensity(norm=False))
