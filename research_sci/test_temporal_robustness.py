@@ -8,6 +8,7 @@ def row(seed,treatment,carbon,misses,finished=20):
         "seed":seed,"treatment":treatment,"test_total_carbon_kg":carbon,
         "test_deadline_failures_including_overdue":misses,
         "test_tasks_finished":finished,"test_tasks_admitted":20,
+        "test_unfinished":20-finished,"test_unfinished_overdue":0,
     }
 
 
