@@ -32,6 +32,13 @@ class TestFacilityAccounting(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "cost"):
             validate_datacenter_step(info)
 
+    def test_negative_electricity_price_is_not_a_physics_error(self):
+        info = self.sample()
+        info["__common__"]["price_USD_kwh"] = -50.0
+        info["__common__"]["energy_cost_USD"] = -0.5
+        result = validate_datacenter_step(info)
+        self.assertAlmostEqual(result["facility_cost_usd"], -0.5)
+
     def test_negative_energy_rejected(self):
         info = self.sample()
         info["__common__"]["energy_consumption_kwh"] = -10.0
