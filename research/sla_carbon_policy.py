@@ -41,14 +41,17 @@ class SLAFeasibleCarbonPolicy:
             # not an estimate of future queue availability.
             if not dc.can_schedule(task):
                 continue
-            delay_seconds = float(
-                self.delay_fn(origin, dc.location, provider, task.bandwidth_gb)
-            )
-            if not math.isfinite(delay_seconds) or delay_seconds < 0:
-                raise ValueError(f"invalid transmission delay: {delay_seconds}")
-            # Newly submitted transmissions are processed at the beginning of
-            # the NEXT environment step, even if transfer delay is zero.
-            wait_steps = max(1, math.ceil(delay_seconds / step_seconds))
+            if dc.dc_id == task.origin_dc_id:
+                # Local placement enters the pending queue immediately.
+                wait_steps = 0
+            else:
+                delay_seconds = float(
+                    self.delay_fn(origin, dc.location, provider, task.bandwidth_gb)
+                )
+                if not math.isfinite(delay_seconds) or delay_seconds < 0:
+                    raise ValueError(f"invalid transmission delay: {delay_seconds}")
+                # Remote transfers first become schedulable in a later step.
+                wait_steps = max(1, math.ceil(delay_seconds / step_seconds))
             finish_estimate = (
                 self.current_time
                 + timedelta(seconds=wait_steps * step_seconds)
