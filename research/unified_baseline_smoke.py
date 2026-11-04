@@ -112,10 +112,11 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None):
         policy = POLICIES[policy_name]()
         policy.reset()
         summary = {
-            "policy": policy_name, "routing": "shared_in_transit",
+            "policy": policy_name, "routing": "shared_action_path_local_immediate_v2",
             "seed": seed, "steps_requested": steps, "steps_completed": 0,
             "admission_steps": steps, "drain_steps": drain_steps,
             "tasks_seen": 0, "tasks_dispatched": 0,
+            "local_dispatches": 0, "remote_dispatches": 0,
             "tasks_started": 0, "tasks_finished": 0,
             "sla_met": 0, "sla_violated": 0,
             "fallback_assignments": 0,
@@ -145,6 +146,12 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None):
                 policy, tasks, env.cluster_manager.datacenters
             )
             summary["fallback_assignments"] += fallbacks
+            dc_order = list(env.cluster_manager.datacenters.values())
+            for task, action in zip(tasks, acts):
+                if dc_order[action - 1].dc_id == task.origin_dc_id:
+                    summary["local_dispatches"] += 1
+                else:
+                    summary["remote_dispatches"] += 1
             dispatched.update(tasks)
             _, _, terminated, truncated, info = env.step(acts)
             summary["steps_completed"] += 1
@@ -212,6 +219,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None):
         assert summary["sla_met"] + summary["sla_violated"] == summary["tasks_finished"], summary
         assert summary["tasks_finished"] == len(finished), "duplicate completion counted"
         assert summary["tasks_finished"] <= summary["tasks_started"] <= len(dispatched), summary
+        assert summary["local_dispatches"] + summary["remote_dispatches"] == summary["tasks_dispatched"], summary
         assert audit["dispatched"] == summary["tasks_dispatched"], summary
         assert audit["finished"] == summary["tasks_finished"], summary
         assert audit["pending"] == summary["pending_last"], summary
