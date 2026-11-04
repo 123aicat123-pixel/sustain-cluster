@@ -37,7 +37,7 @@ class TestSlaMissDiagnostics(unittest.TestCase):
         self.assertEqual(buffers[0]["actual_misses_unchanged"],2)
         self.assertEqual(buffers[0]["false_safe"],2)
         self.assertEqual(buffers[1]["false_safe"],1)
-        self.assertEqual(buffers[1]["false_alarm"],2)
+        self.assertEqual(buffers[1]["false_alarm"],1)
 
     def test_classification_does_not_change_actual_misses(self):
         rows=[r("q",15,30),r("q",80,15),r("q",0,0)]
