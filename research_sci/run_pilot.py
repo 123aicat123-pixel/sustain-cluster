@@ -290,7 +290,7 @@ def main():
                 audit_dir=audit_dir
             )
             rows.append(row)
-            print(json.dumps({
+            report = {
                 "seed": seed, "policy": policy,
                 "carbon_kg": row["total_reported_carbon_kg"],
                 "completed": row["tasks_finished"],
@@ -298,7 +298,19 @@ def main():
                 "overdue": row["unfinished_overdue"],
                 "defer": row["defer_actions"],
                 "queue_predictions": row["estimated_queue_actions"],
-            }), flush=True)
+            }
+            if args.audit_predictions:
+                report.update({
+                    key: row[key] for key in (
+                        "forecast_records", "forecast_unavailable",
+                        "forecast_completed_evaluable", "forecast_censored_unfinished",
+                        "forecast_signed_bias_minutes", "forecast_mae_minutes",
+                        "forecast_p90_abs_error_minutes", "forecast_buffer_coverage",
+                        "forecast_predicted_safe_completed",
+                        "forecast_false_safe_completed", "forecast_false_safe_rate"
+                    )
+                })
+            print(json.dumps(report, allow_nan=False), flush=True)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(rows, indent=2, allow_nan=False), encoding="utf-8")
