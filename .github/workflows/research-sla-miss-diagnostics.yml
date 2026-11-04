@@ -1,0 +1,72 @@
+name: Research retrospective SLA miss stratification
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-sla-miss-diagnostics.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-sla-miss-diagnostics.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  stratify-misses:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Test independent stratification routines
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_sla_miss_diagnostics.py' -v 2>&1 | tee research/results/sla_diagnostic_unit.log
+      - name: Retrieve previously validated per-task forecast evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p research/results/sla_diagnostic_input
+          gh run download 41803067297 --repo "${{ github.repository }}" \
+            --name sla-forecast-confusion-evidence \
+            --dir research/results/sla_diagnostic_input
+          find research/results/sla_diagnostic_input -maxdepth 2 -type f
+      - name: Diagnose false-safe by slack and remote transfer
+        run: |
+          set -o pipefail
+          src=$(find research/results/sla_diagnostic_input \
+            -name 'sla_confusion_jun15_queue_predictions.csv' -print -quit)
+          test -n "$src"
+          python -m research.sla_miss_diagnostics \
+            --input "$src" \
+            --output research/results/sla_diagnostic_stratification.json \
+            2>&1 | tee research/results/sla_diagnostic_stratification.log
+      - name: Assert original task-level SLA counts
+        run: |
+          python - <<'PY'
+          import json
+          data=json.load(open('research/results/sla_diagnostic_stratification.json'))
+          expected={
+            'queue_nsga2':(24,21),
+            'queue_nsga2_carbon_guard':(80,39),
+            'queue_nsga2_carbon_sla_guard':(46,38),
+          }
+          for policy,(misses,false_safe) in expected.items():
+              a=data['policy_results'][policy]['grouped']['all']
+              assert (a['count'],a['actual_misses'],a['false_safe'])==(291,misses,false_safe),(policy,a)
+              print(policy,'misses',misses,'false_safe',false_safe)
+          assert len(data['policy_results'])==3
+          PY
+      - name: Archive stratification without rerunning the simulator
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sla-false-safe-stratification
+          path: research/results/sla_diagnostic_*
+          if-no-files-found: warn
