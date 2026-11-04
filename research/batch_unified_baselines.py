@@ -75,11 +75,12 @@ def main():
         parser.error("--policies must be nonempty and unique")
     results = []
     completed_rows = []
+    prediction_rows = []
     # Run every policy with each identical seed, avoiding random generator
     # coupling between consecutive policies.
     for seed in args.seeds:
         for policy in args.policies:
-            row = run(policy, seed, args.steps, drain_steps=args.drain_steps, completed_records=completed_rows, cpu_capacity_scale=args.cpu_capacity_scale, start_month=args.start_month, start_day=args.start_day)
+            row = run(policy, seed, args.steps, drain_steps=args.drain_steps, completed_records=completed_rows, cpu_capacity_scale=args.cpu_capacity_scale, start_month=args.start_month, start_day=args.start_day, prediction_records=prediction_rows)
             results.append(row)
             print(f"completed: seed={seed} policy={policy} "
                   f"cost={row['reported_total_cost_usd']:.3f} "
@@ -96,6 +97,7 @@ def main():
     csvpath=Path(str(prefix)+".csv")
     summarypath=Path(str(prefix)+"_summary.json")
     taskspath=Path(str(prefix)+"_completed_tasks.csv")
+    forecastpath=Path(str(prefix)+"_queue_predictions.csv")
     jsonpath.write_text(json.dumps(results,indent=2,allow_nan=False),encoding="utf8")
     with csvpath.open("w",newline="",encoding="utf8") as f:
         writer=csv.DictWriter(f,fieldnames=list(results[0]))
@@ -106,6 +108,11 @@ def main():
             detail=csv.DictWriter(f,fieldnames=list(completed_rows[0]))
             detail.writeheader()
             detail.writerows(completed_rows)
+    if prediction_rows:
+        with forecastpath.open("w", newline="", encoding="utf8") as f:
+            detail=csv.DictWriter(f,fieldnames=list(prediction_rows[0]))
+            detail.writeheader()
+            detail.writerows(prediction_rows)
     summary=summarize(results)
     summarypath.write_text(json.dumps(summary,indent=2,allow_nan=False),encoding="utf8")
     print("Wrote",str(jsonpath),str(csvpath),str(summarypath),str(taskspath))
