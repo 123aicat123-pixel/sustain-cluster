@@ -311,3 +311,75 @@ non-vacuous coverage diagnostics; evaluate carbon versus actual SLA
 violation under several held-out calendar windows and capacities.
 Avoid claiming SCI algorithm novelty until an algorithm improves a
 pre-specified SLA-constrained carbon objective against these baselines.
+
+
+## Predeclared SLA/carbon risk frontier: 60-minute buffer dominates 30-minute buffer in the pilot
+
+**Audited run:** [GitHub Actions 41809941949](https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/41809941949),
+successful `risk-frontier` job for commit `36877a31`.
+Raw JSON/CSV and the paired summary were uploaded as artifact
+**13312086734**. A later runner update also verifies the **exact order**
+of held-out task admissions across all four treatments.
+
+The study uses frozen, predefined buffer variants: 30, 60, 120 minutes
+and the empirical calibration quantile from the earlier, disjoint completed
+cohort. Two seeds (1 and 42), synthetic capacity 2%, calibration admissions
+16 ticks, calibration drain 128 ticks, test admissions 16 ticks, held-out
+drain 96 ticks. In every treatment, both seeds completed all **314/314**
+test jobs; **no job remained unfinished at the horizon**.
+
+### Per-seed actual results
+
+| Seed | Margin (min) | Test total carbon (kg) | Actual SLA misses / 314 | Buffered-safe flags / 314 |
+| --- | --- | ---: | ---: | ---: |
+| 1 | 30 | 1436.86 | 131 | 121 |
+| 1 | 60 | 1412.02 | 127 | 86 |
+| 1 | 120 | 1431.95 | 125 | 34 |
+| 1 | history-derived 225 | 1485.63 | 130 | **0** |
+| 42 | 30 | 1638.87 | 131 | 118 |
+| 42 | 60 | 1627.89 | 129 | 89 |
+| 42 | 120 | 1703.85 | 126 | 34 |
+| 42 | history-derived 195 | 1750.20 | 127 | **0** |
+
+### Paired two-seed descriptive averages
+
+| Margin | Mean carbon (kg) | Mean SLA misses | Buffered-safe percentage of admitted jobs |
+| --- | ---: | ---: | ---: |
+| 30 min | 1537.86 | 131 | 38.1% |
+| **60 min** | **1519.96** | **128** | 27.9% |
+| 120 min | 1567.90 | **125.5** | 10.8% |
+| history-derived 195-225 min | 1617.92 | 128.5 | **0% (vacuous)** |
+
+**Meaning:** In these two seeds the 60-minute predetermined buffer
+strictly dominates 30 minutes on **both** actual SLA violation counts
+and end-to-end reported facility+network carbon, for equal completed work.
+The two-seed mean carbon is ~1.16% lower, with 3 fewer actual SLA misses.
+The 120-minute margin achieves fewer deadline misses with more carbon
+than 60 minutes. The large historical quantile is **dominated** by
+120 minutes in both seeds, and has **zero buffered-safe predictions**,
+so no false-safe error rate is defined for it: this is NOT a risk
+certificate.
+
+**Explicit anti-leakage caveat:** 60 minutes was one of four buffers
+**predeclared before executing the held-out test**. Its superior test
+performance is an *observed exploratory comparison*, NOT a validated
+parameter choice; deploying it on the basis of these test outcomes
+would be test-set tuning. A separate pretest validation window or
+nested chronological split is required for margin selection before
+any final held-out reporting.
+
+**No significance/generalization claim:** just two seeds, one calendar
+window and synthetic extreme capacity. Demand seasonality, task duration
+mix, real capacities, and confidence intervals have not been established.
+Risk margins are heuristic SLA slack filters, not calibrated
+chance constraints under nonstationary queueing.
+
+### Next method question
+
+Can we choose a modest, *carbon-cost-aware* SLA risk buffer on
+**validation-only** traces, freeze it, and then improve the
+held-out carbon/SLA Pareto frontier under a pre-registered violation
+budget? To answer, introduce train/validation/test chronological
+separation, broader load regimes, more seeds, and explicit
+prediction safe-set precision/coverage. Do not use the exploratory
+best 60-minute buffer as test-learned hyperparameter evidence.
