@@ -1,0 +1,104 @@
+name: Research independent calendar-workload scenario validation
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-calendar-scenarios.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-calendar-scenarios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  calendar-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator
+        run: python -m pip install -r requirements.txt
+      - name: Extract Alibaba full year trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Run two distinct task-calendar dates with fixed scheduler
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          for scenario in "aug15 8 15" "sep01 9 1"; do
+            set -- $scenario
+            name=$1
+            month=$2
+            day=$3
+            python -m research.batch_unified_baselines \
+              --steps 16 --drain-steps 112 \
+              --seeds 137 271828 \
+              --start-month "$month" --start-day "$day" \
+              --cpu-capacity-scale 0.05 \
+              --policies sla_feasible_carbon queue_nsga2_no_queue queue_nsga2 queue_nsga2_carbon_guard \
+              --output-prefix "research/results/calendar_${name}" \
+              2>&1 | tee "research/results/calendar_${name}.log"
+          done
+      - name: Validate genuine distinct workloads and matched cohorts
+        run: |
+          python - <<'PY'
+          import csv,json
+          from pathlib import Path
+          fingerprints=[]
+          all_reports={}
+          for name,month,day in [('aug15',8,15),('sep01',9,1)]:
+              prefix=Path(f'research/results/calendar_{name}')
+              rows=json.loads(prefix.with_suffix('.json').read_text())
+              assert len(rows)==8
+              statuses=[]
+              for seed in [137,271828]:
+                  batch=[r for r in rows if r['seed']==seed]
+                  assert len(batch)==4
+                  assert {r['scenario_start_month'] for r in batch}=={month}
+                  assert {r['scenario_start_day'] for r in batch}=={day}
+                  assert len({r['tasks_dispatched'] for r in batch})==1
+                  for r in batch:
+                      assert r['lifecycle_conserved']
+                      assert r['task_audit_completed']==r['tasks_finished']
+                      statuses.append({'seed':seed,'policy':r['policy'],
+                          'finished':r['tasks_finished'],'unresolved':r['unfinished_dispatched'],
+                          'fallback':r['fallback_assignments']})
+              with Path(str(prefix)+'_completed_tasks.csv').open(newline='') as f:
+                  taskrows=list(csv.DictReader(f))
+              # Only need one reference policy+seed to identify input workload
+              cohort={(r['arrival_utc'],r['job_name']) for r in taskrows
+                      if r['policy']=='sla_feasible_carbon' and str(r['seed'])=='137'}
+              fingerprints.append(cohort)
+              comparable=all(x['unfinished_dispatched']==0 and x['fallback_assignments']==0 for x in rows)
+              all_reports[name]={'all_full_comparisons_eligible':comparable,
+                                 'run_states':statuses,'unique_tasks':len(cohort)}
+              if not comparable:
+                  print('CENSORED scenario',name,'-- no full-cohort superiority claim')
+          assert fingerprints[0]!=fingerprints[1], 'Calendar inputs generated same task cohort'
+          all_reports['distinct_admission_cohorts']=True
+          Path('research/results/calendar_validation.json').write_text(json.dumps(all_reports,indent=2))
+          print(json.dumps(all_reports,indent=2))
+          PY
+      - name: Pair completed task outcomes within each calendar scenario
+        run: |
+          set -o pipefail
+          for name in aug15 sep01; do
+            python -m research.paired_task_analysis \
+              --input "research/results/calendar_${name}_completed_tasks.csv" \
+              --reference queue_nsga2 \
+              --output "research/results/calendar_${name}_paired.json" \
+              2>&1 | tee "research/results/calendar_${name}_paired.log"
+          done
+      - name: Preserve independent date evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: calendar-scenario-raw-results
+          path: research/results/calendar_*
+          retention-days: 90
+          if-no-files-found: warn
