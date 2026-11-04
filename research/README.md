@@ -41,6 +41,35 @@ reproduction or a claim that any scheduling algorithm is scientifically valid.
   Three seeds and one load window are insufficient to claim significance or
   publish a general algorithm ranking.
 
+## Verified paired-task exploratory finding (2026-11-04)
+
+From GitHub Actions run [41778053806](https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/41778053806),
+five comparators × three seeds completed successfully with 776 tasks per run,
+no outstanding queue/running/transfer tasks, and **49/49** research contract tests.
+
+The exported `unified_batch_completed_tasks.csv` was independently matched by
+`(seed, arrival_utc, job_name)`. Task IDs and arrival/deadline/resource
+characteristics are aligned across the matched baselines.
+
+- Against `lowest_carbon`, `sla_feasible_carbon` rescued respectively
+  16, 16, and 12 deadline misses for seeds 1, 42, and 2026, while harming
+  0 matched tasks in these particular trials.
+- Its violated-task counts were 128/776 in each seed, versus
+  144/776, 144/776, and 140/776 for `lowest_carbon`.
+- `edf_sla_carbon`, which only sorts same-timestep dispatch batches by
+  absolute deadline, produced **identical per-task** destination, start time,
+  finish time, and SLA to `sla_feasible_carbon` for all three seeds.
+  This is a *negative result*: it is **not** an independent competitive
+  baseline in this configuration. A queue-level EDF design would add different
+  control capability and require its own fairness protocol, not be silently
+  substituted.
+- These are three correlated seeded simulator conditions, **not**
+  proof of generalization, statistical significance, or physical validity.
+  Longer admission windows and independent workload/date scenarios are needed.
+
+`research/paired_task_analysis.py` now automates this cohort-consistency
+check and writes a per-seed rescue/harm report to Actions artifacts.
+
 ## Important audit findings before comparing algorithms
 1. `utils/task_assignment_strategies.py` has multiple original strategies.
    `lowest_price`, `lowest_carbon`, and `most_available` consult
