@@ -28,7 +28,7 @@ from research.physical_accounting import validate_datacenter_step
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
-from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard
+from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -46,6 +46,7 @@ POLICIES = {
     "nsga2_surrogate": NSGA2BatchPolicy,
     "queue_nsga2": QueueAwareFull,
     "queue_nsga2_carbon_guard": QueueAwareCarbonGuard,
+    "queue_nsga2_carbon_sla_guard": QueueAwareCarbonSlaGuard,
     "queue_nsga2_no_queue": QueueAblationNoQueue,
     "queue_nsga2_no_transfer": QueueAblationNoTransferCost,
 }
@@ -236,6 +237,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         summary["nsga2_batch_optimizations"] = getattr(policy, "optimizations", 0)
         summary["carbon_guard_checks"] = getattr(policy, "carbon_guard_checks", 0)
         summary["carbon_guard_interventions"] = getattr(policy, "carbon_guard_interventions", 0)
+        summary["carbon_guard_vetoes"] = getattr(policy, "carbon_guard_vetoes", 0)
         summary["carbon_guard_extra_fitness_calls"] = getattr(policy, "carbon_guard_extra_fitness_calls", 0)
         summary["tasks_seen"] = len(seen)
         summary["tasks_dispatched"] = len(dispatched)
