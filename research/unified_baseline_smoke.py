@@ -29,7 +29,7 @@ from research.queue_prediction_audit import audit_forecasts
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
-from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard
+from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -46,6 +46,7 @@ POLICIES = {
     "edf_sla_carbon": SLAFeasibleCarbonPolicy,
     "nsga2_surrogate": NSGA2BatchPolicy,
     "queue_nsga2": QueueAwareFull,
+    "queue_nsga2_with_transit": QueueAwareWithTransit,
     "queue_nsga2_carbon_guard": QueueAwareCarbonGuard,
     "queue_nsga2_carbon_sla_guard": QueueAwareCarbonSlaGuard,
     "queue_nsga2_no_queue": QueueAblationNoQueue,
@@ -172,6 +173,8 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
                 seen.add(task)
             if hasattr(policy, "set_context"):
                 policy.set_context(env.current_time, env.cluster_manager)
+            if hasattr(policy, "set_in_transit"):
+                policy.set_in_transit(env.in_transit_tasks, env.cluster_manager.datacenters)
             if hasattr(policy, "select_batch"):
                 acts, fallbacks = policy.select_batch(tasks, env.cluster_manager.datacenters)
             else:
