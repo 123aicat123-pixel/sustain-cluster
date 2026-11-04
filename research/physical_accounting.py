@@ -15,8 +15,12 @@ def validate_datacenter_step(dc_info, *, relative_tolerance=1e-8):
     price_per_mwh = float(common["price_USD_kwh"])
     avg_ci_g_per_kwh = float(battery.get("bat_avg_CI", 0))
     values = (energy, facility_cost, carbon, price_per_mwh, avg_ci_g_per_kwh)
-    if any((not math.isfinite(x) or x < 0) for x in values):
-        raise AssertionError("negative or nonfinite facility accounting value")
+    if any(not math.isfinite(x) for x in values):
+        raise AssertionError(f"nonfinite facility accounting value: {values!r}")
+    if energy < 0 or carbon < 0 or avg_ci_g_per_kwh < 0:
+        raise AssertionError(f"negative energy, carbon, or carbon intensity: {values!r}")
+    # Electricity price may be negative, and the associated electricity
+    # payment then has a negative sign. Do not discard such observations.
     # Original simulator multiplies price_i / 1000, so this field is
     # effectively treated as USD/MWh despite its misleading name.
     expected_cost = energy * price_per_mwh / 1000.0
