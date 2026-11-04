@@ -20,15 +20,14 @@ import tempfile
 from datetime import timedelta
 from pathlib import Path
 
-import numpy as np
-import yaml
-
-from data.network_cost.network_delay import get_transmission_delay
 from research_sci.online_calibration import OnlineResidualCalibrator
 from research_sci.prediction_audit import summarize_forecasts
 from research_sci.queue_risk import QueueRiskCarbonPolicy, predict_finish
-from research_sci.run_pilot import CONFIG, DC_CONFIG, REWARD_CONFIG, ROOT
-from train_SAC_agent import make_env
+
+ROOT = Path(__file__).resolve().parents[1]
+CONFIG = ROOT / "configs/env/sim_config.yaml"
+DC_CONFIG = ROOT / "configs/env/datacenters.yaml"
+REWARD_CONFIG = ROOT / "configs/env/reward_config.yaml"
 
 
 TREATMENTS = ("fixed_30", "precalibrated_frozen")
@@ -53,6 +52,12 @@ def _signature(items):
 
 
 def _create_env(seed, total_steps, capacity_scale, scratch):
+    # Defer simulator and ML dependency imports: lightweight contract tests
+    # run on GitHub Actions without installing 3rd-party packages.
+    import numpy as np
+    import yaml
+    from train_SAC_agent import make_env
+
     if not (0 < capacity_scale <= 1):
         raise ValueError("capacity_scale must lie in (0, 1]")
     random.seed(seed)
@@ -94,6 +99,8 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
     timeline_phase(total_steps-1, calibration_steps, gap_steps, test_steps, drain_steps)
     if total_steps > 672:
         raise ValueError("Keep pilot within seven-day simulator trace")
+
+    from data.network_cost.network_delay import get_transmission_delay
 
     with tempfile.TemporaryDirectory(prefix="sci_chronological_") as tmp:
         env = _create_env(seed, total_steps, capacity_scale, Path(tmp))
