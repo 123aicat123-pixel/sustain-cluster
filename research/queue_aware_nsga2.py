@@ -1,0 +1,239 @@
+"""Queue-aware, transmission-accounting online NSGA-II research prototype.
+
+The queue predictor uses only running finish times, current pending queues,
+the currently admitted batch, and publicly/currently observed energy-price and
+carbon signals. It NEVER looks at future workload rows or future CI/price.
+
+This is a pre-publication HYPOTHESIS, not an established novel method.
+Ablations keep the same chromosome, feasible action choices, optimizer and
+evaluation budget: (1) no current queue model; (2) no transfer externality
+in cost/carbon, but still enforce transfer *latency* for SLA predictions.
+
+Reported optimizer fitness is an explicitly approximate incremental proxy;
+final results always come from the independent full simulator.
+"""
+from __future__ import annotations
+
+from collections import deque
+from datetime import timedelta
+import math
+
+from data.network_cost.network_delay import get_transmission_delay
+from research.nsga2_batch_policy import NSGA2BatchPolicy
+from research.nsga2_core import nsga2_optimize
+from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
+from utils.transmission_region_mapper import map_location_to_region
+
+
+STEP_MINUTES = 15
+STEP = timedelta(minutes=STEP_MINUTES)
+
+
+def predict_starts(dc, arrivals, now, max_steps=672):
+    """Predict new-task start timestamps by simulating CURRENT FIFO queues.
+
+    `arrivals` holds (new_task, datetime eligible) in decision-batch order.
+    Current running tasks retain their *known* finish timestamps. Existing
+    pending tasks precede new arrivals at each simulated 15-minute tick.
+    No future externally arriving tasks are included.
+
+    Returns {new_task: predicted_start}. Raises if a task cannot fit
+    physical capacity, or cannot start within the seven-day projection.
+    """
+    available = [
+        float(dc.available_cores), float(dc.available_gpus),
+        float(dc.available_mem),
+    ]
+    total = [
+        float(dc.total_cores), float(dc.total_gpus),
+        float(dc.total_mem_GB),
+    ]
+    req = lambda t: (float(t.cores_req), float(t.gpu_req), float(t.mem_req))
+    if any(any(x > maximum + 1e-8 for x, maximum in zip(req(task), total))
+           for task, _ in arrivals):
+        raise ValueError("new task exceeds total data center resources")
+    scheduled = [(task.finish_time, task) for task in dc.running_tasks]
+    if any(when is None for when, _ in scheduled):
+        raise ValueError("running task has no finish timestamp")
+    queue = deque(dc.pending_tasks)
+    waiting = sorted(enumerate(arrivals), key=lambda x: (x[1][1], x[0]))
+    cursor = 0
+    begins = {}
+    for step in range(max_steps + 1):
+        tick = now + step * STEP
+        still_running = []
+        for finish, task in scheduled:
+            if finish <= tick:
+                available = [a + x for a, x in zip(available, req(task))]
+            else:
+                still_running.append((finish, task))
+        scheduled = still_running
+        # Only the presently assigned tasks in this batch are admitted here.
+        while cursor < len(waiting) and waiting[cursor][1][1] <= tick:
+            queue.append(waiting[cursor][1][0])
+            cursor += 1
+        for _ in range(len(queue)):
+            task = queue.popleft()
+            resources = req(task)
+            if all(a + 1e-8 >= x for a, x in zip(available, resources)):
+                available = [a - x for a, x in zip(available, resources)]
+                end = tick + timedelta(minutes=float(task.duration))
+                scheduled.append((end, task))
+                if task in dict(arrivals):
+                    if task in begins:
+                        raise AssertionError("new task scheduled twice")
+                    begins[task] = tick
+            else:
+                queue.append(task)
+        if len(begins) == len(arrivals):
+            return begins
+    raise RuntimeError("queue projection exhausted: choose longer horizon")
+
+
+class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
+    """Fixed-budget routing with queue-model / transfer-accounting ablations."""
+
+    def __init__(self, *, seed=0, population=16, generations=8,
+                 delay_fn=None, queue_aware=True, transfer_accounting=True):
+        self.queue_aware = queue_aware
+        self.transfer_accounting = transfer_accounting
+        super().__init__(seed=seed, population=population,
+                         generations=generations, delay_fn=delay_fn)
+
+    def select_batch(self, tasks, datacenters):
+        if not tasks:
+            return [], 0
+        if self.current_time is None or self.cluster_manager is None:
+            raise RuntimeError("set_context must be called first")
+        dcs = list(datacenters.values())
+        if not dcs:
+            raise ValueError("empty data center set")
+        by_id = {dc.dc_id: dc for dc in dcs}
+        if len(by_id) != len(dcs):
+            raise ValueError("duplicate data center IDs")
+        manager = self.cluster_manager
+        now = self.current_time
+        heuristic = SLAFeasibleCarbonPolicy(delay_fn=self.delay_fn)
+        heuristic.set_context(now, manager)
+        choices, heuristic_seed, fallback_count = [], [], 0
+        # Same TOTAL-resource feasible set across all ablations. A busy DC
+        # remains a legal routing action; jobs can wait in its pending FIFO.
+        for task in tasks:
+            candidate = [
+                dc.dc_id for dc in dcs
+                if task.cores_req <= dc.total_cores
+                and task.gpu_req <= dc.total_gpus
+                and task.mem_req <= dc.total_mem_GB
+            ]
+            if not candidate:
+                fallback_count += 1
+                candidate = [
+                    task.origin_dc_id if task.origin_dc_id in by_id
+                    else min(by_id)
+                ]
+            choices.append(candidate)
+            h = heuristic(task, datacenters)
+            heuristic_seed.append(h if h in candidate else candidate[0])
+
+        estimated = []
+        for task, candidate in zip(tasks, choices):
+            origin = by_id[task.origin_dc_id]
+            original_location = origin.location
+            origin_region = map_location_to_region(original_location,
+                                                   manager.cloud_provider)
+            origin_ci = float(origin.ci_manager.get_current_ci(norm=False))
+            one = {}
+            for dc_id in candidate:
+                dest = by_id[dc_id]
+                if dc_id == task.origin_dc_id:
+                    transfer_mins = 0
+                    transfer_cost = 0
+                    transfer_carbon = 0
+                else:
+                    delay = float(self.delay_fn(
+                        original_location, dest.location,
+                        manager.cloud_provider, task.bandwidth_gb
+                    ))
+                    if not math.isfinite(delay) or delay < 0:
+                        raise ValueError("invalid transfer delay")
+                    transfer_mins = max(STEP_MINUTES,
+                                        math.ceil(delay / (STEP_MINUTES * 60))
+                                        * STEP_MINUTES)
+                    dest_region = map_location_to_region(dest.location,
+                                                         manager.cloud_provider)
+                    transfer_cost = (float(manager.transmission_matrix.loc[
+                        origin_region, dest_region
+                    ]) * float(task.bandwidth_gb))
+                    transfer_carbon = (
+                        0.06 * float(task.bandwidth_gb) * origin_ci / 1000
+                    )
+                # Explicit 6W/core energy proxy, NOT physical DC energy.
+                e_kwh = float(task.cores_req) * float(task.duration) / 60 * 0.006
+                price = float(dest.price_manager.get_current_price())
+                ci = float(dest.get_current_carbon_intensity(norm=False))
+                if not all(math.isfinite(v) for v in
+                           (price, ci, origin_ci, transfer_cost, transfer_carbon)):
+                    raise ValueError("nonfinite observed prices/carbon")
+                cost = e_kwh * price / 1000
+                carbon = e_kwh * ci / 1000
+                if self.transfer_accounting:
+                    cost += transfer_cost
+                    carbon += transfer_carbon
+                one[dc_id] = (cost, carbon, transfer_mins)
+            estimated.append(one)
+
+        def fitness(chrom):
+            cost = carbon = tardiness = 0.0
+            arrivals = {dc.dc_id: [] for dc in dcs}
+            for task, dc_id, candidate_metrics in zip(tasks, chrom, estimated):
+                c, co, delay_mins = candidate_metrics[dc_id]
+                cost += c
+                carbon += co
+                arrivals[dc_id].append((task, now + timedelta(minutes=delay_mins)))
+
+            if self.queue_aware:
+                start_times = {}
+                for dc in dcs:
+                    if arrivals[dc.dc_id]:
+                        start_times.update(predict_starts(dc, arrivals[dc.dc_id], now))
+            else:
+                start_times = {
+                    task: ready for incoming in arrivals.values()
+                    for task, ready in incoming
+                }
+            for task in tasks:
+                predicted_finish = start_times[task] + timedelta(
+                    minutes=float(task.duration)
+                )
+                tardiness += max(
+                    0.0,
+                    (predicted_finish-task.sla_deadline).total_seconds()/60
+                )
+            return cost, carbon, tardiness
+
+        chromosome, metrics = nsga2_optimize(
+            choices, fitness, population_size=self.population,
+            generations=self.generations, rng=self.rng,
+            seeds=[heuristic_seed], weights=(0.1, 0.1, 0.8)
+        )
+        self.optimizations += 1
+        self.surrogate_evaluations += metrics["surrogate_evaluations"]
+        self.evaluation_requests += metrics["evaluation_requests"]
+        self.last_metrics = metrics
+        to_action = {dc.dc_id: i+1 for i, dc in enumerate(dcs)}
+        return [to_action[gene] for gene in chromosome], fallback_count
+
+
+class QueueAwareFull(QueueAwareNSGA2Policy):
+    def __init__(self, **kwargs):
+        super().__init__(queue_aware=True, transfer_accounting=True, **kwargs)
+
+
+class QueueAblationNoQueue(QueueAwareNSGA2Policy):
+    def __init__(self, **kwargs):
+        super().__init__(queue_aware=False, transfer_accounting=True, **kwargs)
+
+
+class QueueAblationNoTransferCost(QueueAwareNSGA2Policy):
+    def __init__(self, **kwargs):
+        super().__init__(queue_aware=True, transfer_accounting=False, **kwargs)
