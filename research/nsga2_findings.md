@@ -71,6 +71,36 @@ CI: https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/4178850692
 - Simulated physical accounting identities, SLA task timeline and lifecycle
   conservation were checked. Physical calibration remains open.
 
+
+## Fresh-seed extension (no parameter change)
+
+GitHub Actions:
+https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/41788998616
+
+Three additional seeds (27182, 12345, 8080) ran with 64 admission
+steps and 128 drain steps, 1,816 tasks per run, zero unfinished jobs,
+zero fallback, and validated paired cohorts.
+
+| Policy | Mean USD total cost | Mean kg carbon | SLA misses / 5,448 |
+|---|---:|---:|---:|
+| Lowest Carbon | 24594.097 | 80256.706 | 1016 |
+| SLA-Carbon | 24539.036 | 80438.294 | 76 |
+| NSGA-II surrogate | 24413.146 | 80438.769 | 83 |
+
+Paired violations by seed (27182 / 12345 / 8080):
+Lowest Carbon 340 / 330 / 346;
+SLA-Carbon 24 / 29 / 23;
+NSGA-II 41 / 18 / 24.
+
+NSGA-II cost is lower than SLA-Carbon in all three additional seeds;
+its mean reduction is USD 125.89, or approximately 0.51% of
+SLA-Carbon's mean cost. On this extension, NSGA-II has 7 more
+SLA misses across three seeds and nearly equal mean carbon (+0.475 kg).
+This is a descriptive tradeoff, NOT a statistically established advantage.
+A fixed compromise weight chosen without domain calibration can shift the
+observed tradeoff; this is a case for *pre-registered* ablations, not
+test-set tuning. All outcomes depend on the current simulator assumptions.
+
 ## Research implications and next validation gates
 
 1. Learn whether prediction errors are dominated by transfer delay, queue
