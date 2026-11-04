@@ -73,6 +73,11 @@ jobs:
         run: |
           set -o pipefail
           python -m research.paired_task_analysis 2>&1 | tee research/results/paired-task-audit.log
+      - name: CPU-constrained contention sensitivity smoke
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines --steps 32 --drain-steps 96 --seeds 42 --policies lowest_carbon sla_feasible_carbon --cpu-capacity-scale 0.002 --output-prefix research/results/cpu_stress_0002 2>&1 | tee research/results/cpu-stress.log
+          python -m research.paired_task_analysis --input research/results/cpu_stress_0002_completed_tasks.csv --output research/results/cpu_stress_0002_paired.json
       - name: Archive full-simulator results
         if: always()
         uses: actions/upload-artifact@v4
