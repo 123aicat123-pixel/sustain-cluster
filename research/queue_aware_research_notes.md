@@ -33,6 +33,37 @@ The three queue-aware variants use the same population (16), generations
 (8), local seeded RNG, total-resource candidate set, and choice of final
 normalized Pareto compromise (0.1, 0.1, 0.8).
 
+
+## Verified pilot: negative queue-model ablation
+
+GitHub Actions run:
+https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/41790992393
+
+At seed 42, 16 admission steps + 48 drain steps, all five policies
+completed the same 417/417 tasks. All runs had zero SLA deadline
+violations and passed independent task-level cohort checks.
+
+| Policy | Total cost USD | Total carbon kg | SLA misses |
+|---|---:|---:|---:|
+| SLA-Carbon | 8393.566 | 29574.180 | 0 |
+| NSGA-II surrogate | 8398.326 | 29583.320 | 0 |
+| Queue-aware full | 8403.618 | 29624.261 | 0 |
+| No queue predictor | 8403.618 | 29624.261 | 0 |
+| No transfer externality proxy | 8398.326 | 29583.320 | 0 |
+
+On this uncongested pilot the complete queue predictor produced
+**no observed effect**: No-Queue matched the full method on final
+cost, carbon, SLA, and task destination changes relative to SLA-Carbon.
+The additional network proxy shifted routes and was worse than the
+simple method on both cost and carbon. This is evidence *against*
+claiming queue/transfer modeling is beneficial under this condition.
+
+Follow-up: an independently recorded 2%/5% CPU-capacity sensitivity
+experiment tests whether contention changes this conclusion.
+It must not be called favorable without full drain and paired-cohort
+verification, and scale-dependent facility energy assumptions require
+separate calibration.
+
 ## Current limitations and possible confounders
 
 1. Queue predictions omit future arrivals and any uncertainty, and predict
