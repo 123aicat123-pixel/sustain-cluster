@@ -5,9 +5,6 @@ on:
     branches: [research-baselines]
     paths:
       - ".github/workflows/research-nsga2-holdout.yml"
-  pull_request:
-    paths:
-      - ".github/workflows/research-nsga2-holdout.yml"
   workflow_dispatch:
 
 permissions:
