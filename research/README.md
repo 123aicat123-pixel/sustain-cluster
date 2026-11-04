@@ -114,6 +114,23 @@ cost/SLA superiority. Tests now bracket less extreme CPU scales 0.005 and
 0.01 to locate an interpretable contention regime. Future experiments must
 record fallback rate, completion coverage and drain state before ranking.
 
+
+## Scope boundary: independent tasks versus DAG workflows
+
+The current `rl_components.task.Task` objects store arrival, duration,
+resource requests and an SLA deadline. The evaluated Alibaba
+`extract_tasks_from_row` dispatch path and `TaskSchedulingEnv` do not
+expose a predecessor/successor graph, dependency-ready queue, or
+inter-task communication edges. Consequently, the experiments above are
+**multi-data-center independent-job scheduling**, **not** a validated DAG
+workflow scheduling benchmark.
+
+Do not claim a DAG/cloud-workflow contribution from these experiments
+without adding dependency semantics and verifying precedence constraints,
+DAG completion time, and communication edge costs. The existing results
+can instead support a carbon-/cost-/SLA-aware distributed-job-scheduling
+paper, subject to independent model and baseline validation.
+
 ## Important audit findings before comparing algorithms
 1. `utils/task_assignment_strategies.py` has multiple original strategies.
    `lowest_price`, `lowest_carbon`, and `most_available` consult
