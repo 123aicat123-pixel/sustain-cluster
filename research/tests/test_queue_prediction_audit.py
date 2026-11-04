@@ -9,6 +9,7 @@ def make_task(name,actual,origin,dest):
     item=type("DummyTask",(),{})()
     item.job_name=name
     item.start_time=actual
+    item.duration=10
     item.finish_time=actual+timedelta(minutes=10)
     item.sla_deadline=actual+timedelta(minutes=5)
     item.origin_dc_id=origin
