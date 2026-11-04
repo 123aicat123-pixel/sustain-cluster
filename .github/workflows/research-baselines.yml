@@ -76,7 +76,7 @@ jobs:
       - name: CPU-constrained contention sensitivity smoke
         run: |
           set -o pipefail
-          for scale in 0.005 0.01; do
+          for scale in 0.02 0.05; do
             key=${scale//./}
             python -m research.batch_unified_baselines --steps 32 --drain-steps 96 --seeds 42 --policies lowest_carbon sla_feasible_carbon --cpu-capacity-scale "$scale" --output-prefix "research/results/cpu_stress_${key}" 2>&1 | tee "research/results/cpu-stress-${key}.log"
           done
