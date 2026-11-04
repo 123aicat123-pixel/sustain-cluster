@@ -59,11 +59,19 @@ def window_summary(rows, selected, index):
     for seed in seeds:
         base=group[(seed,"fixed_30")]
         chosen=group[(seed,selected)]
-        equal=(base["test_tasks_finished"]==chosen["test_tasks_finished"]
-               and base["test_tasks_admitted"]==chosen["test_tasks_admitted"])
+        same_count=(base["test_tasks_finished"]==chosen["test_tasks_finished"]
+                    and base["test_tasks_admitted"]==chosen["test_tasks_admitted"])
+        same_identity=(base.get("test_finished_work_signature")
+                       ==chosen.get("test_finished_work_signature")
+                       and base.get("test_finished_work_signature") is not None)
+        equal=same_count and same_identity
         comparisons.append({
             "seed":seed,
             "equal_completed_work":equal,
+            "same_completed_count":same_count,
+            "same_completed_task_identity":same_identity,
+            "reference_completed_core_minutes":base.get("test_completed_core_minutes"),
+            "chosen_completed_core_minutes":chosen.get("test_completed_core_minutes"),
             "reference_carbon_kg":base["test_total_carbon_kg"],
             "chosen_carbon_kg":chosen["test_total_carbon_kg"],
             # Absolute totals are recorded for transparency, but a carbon
