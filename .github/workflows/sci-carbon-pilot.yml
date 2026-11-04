@@ -1,0 +1,50 @@
+name: SCI carbon pilot
+
+on:
+  push:
+    branches:
+      - research/sci-carbon-pilot
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Run independent strategy tests
+        run: |
+          python -m unittest research_sci.test_policies -v
+      - name: Syntax validation
+        run: |
+          python -m compileall -q research_sci/
+
+  simulator-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: |
+          unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Run matched-action full-simulator pilot
+        run: |
+          python -m research_sci.run_pilot --steps 8 --drain-steps 24 --seeds 42
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sci-carbon-pilot-results
+          path: research_sci/results/
+          if-no-files-found: warn
