@@ -152,7 +152,12 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
                             env.cluster_manager.cloud_provider, task.bandwidth_gb))
                         if not math.isfinite(delay) or delay < 0:
                             raise AssertionError("Invalid transmission delay")
-                        arrival_eta = env.current_time + timedelta(seconds=delay)
+                        # New batch routes cannot enter a DC on this same tick:
+                        # TaskSchedulingEnv drains in_transit BEFORE routing.
+                        arrival_eta = max(
+                            env.current_time + env.time_step,
+                            env.current_time + timedelta(seconds=delay),
+                        )
                         if audit_predictions:
                             tick_seconds = int(env.time_step.total_seconds())
                             arrival_ticks = max(1, math.ceil(delay / tick_seconds))
