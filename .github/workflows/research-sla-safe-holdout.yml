@@ -1,0 +1,111 @@
+name: Research SLA-safe carbon guard unseen calendar test
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-sla-safe-holdout.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-sla-safe-holdout.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sla-safe-holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install full simulator
+        run: python -m pip install -r requirements.txt
+      - name: Extract Alibaba trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Verify all unit contracts
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m unittest discover -s research/tests -p 'test_*.py' -v 2>&1 | tee research/results/sla_safe_unit.log
+      - name: Two unseen workload calendar windows
+        run: |
+          set -o pipefail
+          for scenario in "jun15 6 15" "oct01 10 1"; do
+            set -- $scenario
+            name=$1
+            month=$2
+            day=$3
+            python -m research.batch_unified_baselines \
+              --steps 16 --drain-steps 112 \
+              --seeds 501 733 \
+              --start-month "$month" --start-day "$day" \
+              --cpu-capacity-scale 0.05 \
+              --policies sla_feasible_carbon queue_nsga2 queue_nsga2_carbon_guard queue_nsga2_carbon_sla_guard \
+              --output-prefix "research/results/sla_safe_${name}" \
+              2>&1 | tee "research/results/sla_safe_${name}.log"
+          done
+      - name: Verify dates and cohort eligibility without censoring bias
+        run: |
+          python - <<'PY'
+          import csv,json
+          from pathlib import Path
+          workloads=[]
+          status={}
+          for name,month,day in [('jun15',6,15),('oct01',10,1)]:
+              prefix=f'research/results/sla_safe_{name}'
+              rows=json.load(open(prefix+'.json'))
+              assert len(rows)==8
+              for seed in (501,733):
+                  runs=[x for x in rows if x['seed']==seed]
+                  assert len(runs)==4
+                  assert len({x['tasks_dispatched'] for x in runs})==1
+                  assert all(x['lifecycle_conserved'] for x in runs)
+                  assert all(x['scenario_start_month']==month and x['scenario_start_day']==day for x in runs)
+                  for x in runs:
+                      if x['policy'] in ('queue_nsga2_carbon_guard','queue_nsga2_carbon_sla_guard'):
+                          assert x['carbon_guard_checks']==x['nsga2_batch_optimizations']
+                          assert x['carbon_guard_extra_fitness_calls']==2*x['carbon_guard_checks']
+                  eligible=all(x['fully_drained'] and x['fallback_assignments']==0 for x in runs)
+                  status[f'{name}_{seed}']={
+                      'eligible':eligible,'task_count':runs[0]['tasks_dispatched'],
+                      'policies':[{ 'name':x['policy'],'sla_misses':x['sla_violated'],
+                          'carbon_kg':x['reported_total_carbon_kg'],
+                          'cost_usd':x['reported_total_cost_usd'],
+                          'fallbacks':x['fallback_assignments'],
+                          'unfinished':x['unfinished_dispatched'],
+                          'guard_vetoes':x.get('carbon_guard_vetoes',0)} for x in runs]
+                  }
+                  if not eligible:
+                      print('CENSORED scenario',name,'seed',seed)
+              with open(prefix+'_completed_tasks.csv',newline='') as f:
+                  task_rows=list(csv.DictReader(f))
+              cohort={(r['arrival_utc'],r['job_name']) for r in task_rows
+                      if str(r['seed'])=='501' and r['policy']=='queue_nsga2'}
+              assert cohort, f'No tasks loaded: {name}'
+              workloads.append(cohort)
+          assert workloads[0]!=workloads[1], 'Calendar workloads identical'
+          Path('research/results/sla_safe_eligibility.json').write_text(json.dumps(status,indent=2))
+          print(json.dumps(status,indent=2))
+          PY
+      - name: Independently pair each date's completed tasks
+        run: |
+          set -o pipefail
+          for name in jun15 oct01; do
+            python -m research.paired_task_analysis \
+              --input "research/results/sla_safe_${name}_completed_tasks.csv" \
+              --reference queue_nsga2 \
+              --output "research/results/sla_safe_${name}_paired.json" \
+              2>&1 | tee "research/results/sla_safe_${name}_paired.log"
+          done
+      - name: Retain raw task-level evidence and failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sla-safe-holdout-calendars
+          path: research/results/sla_safe_*
+          retention-days: 90
+          if-no-files-found: warn
