@@ -80,6 +80,26 @@ class QueueEstimatorTests(unittest.TestCase):
         self.task.cores_req = 3
         self.assertIsNone(predict_finish(self.task, self.dc, self.now, 1, max_ticks=4))
 
+    def test_in_transit_reservation_delays_future_arrival(self):
+        prior = IdentityTask("already-in-transit", duration=60, cpu=2)
+        arrival = self.now + timedelta(minutes=15)
+        self.assertEqual(
+            predict_finish(self.task, self.dc, self.now, 1,
+                           known_arrivals=[(arrival, prior)]),
+            self.now + timedelta(minutes=90),
+        )
+
+    def test_no_hidden_arrivals_and_no_double_reservation(self):
+        prior = IdentityTask("previous-batch", duration=30, cpu=2)
+        arrival = self.now + timedelta(minutes=15)
+        prediction = predict_finish(
+            self.task, self.dc, self.now, 1,
+            known_arrivals=[(arrival, prior)])
+        self.assertEqual(prediction, self.now + timedelta(minutes=60))
+        with self.assertRaises(AssertionError):
+            predict_finish(self.task, self.dc, self.now, 1,
+                           known_arrivals=[(arrival, self.task)])
+
     def test_reject_invalid_horizon(self):
         with self.assertRaises(ValueError):
             predict_finish(self.task, self.dc, self.now, 0)
