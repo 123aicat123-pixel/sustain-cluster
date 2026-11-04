@@ -21,6 +21,26 @@ reproduction or a claim that any scheduling algorithm is scientifically valid.
   `sim_cfg` into `TaskSchedulingEnv`, which previously silently ignored the
   YAML action/defer flags during environment construction.
 
+## Task-level SLA validation and EDF comparator
+
+- `research/task_sla_audit.py` independently recomputes SLA from task
+  `finish_time <= sla_deadline`, checking arrival/start/finish order,
+  execution duration, and the simulator's recorded SLA flag. It reports mean
+  and P95 response/wait times and positive tardiness in minutes.
+- `edf_sla_carbon` is a **priority-order baseline**, not a novel algorithm:
+  it sorts each dispatch batch by the *absolute deadline* before applying
+  the same spatial SLA-feasible low-carbon selector. As routing waits and
+  FIFO queueing matter, this is a useful check of priority benefits.
+- `batch_unified_baselines.py` outputs
+  `unified_batch_completed_tasks.csv` alongside run-level JSON/CSV and
+  summaries. CSV contains task timestamps and recomputed SLA status.
+- Each simulation includes a fixed admission horizon followed by drain
+  steps. We preserve the count of outstanding and overdue unfinished tasks.
+  Any nonzero leftovers invalidate a claimed **completed-cohort** result.
+- The tests audit internal consistency, *not* real-world physical calibration.
+  Three seeds and one load window are insufficient to claim significance or
+  publish a general algorithm ranking.
+
 ## Important audit findings before comparing algorithms
 1. `utils/task_assignment_strategies.py` has multiple original strategies.
    `lowest_price`, `lowest_carbon`, and `most_available` consult
@@ -77,5 +97,4 @@ python -m unittest discover -s research/tests -p 'test_*.py' -v
 paper-grade comparison. The unified adapter is currently under verification;
 long-window accounting and invariants remain to be validated.
 
-**Scientific status:** Not yet reproduced. No baseline performance numbers
-should be quoted until a full and independently checked simulation runs.
+**Scientific status:** The new SLA and EDF experimental checks are being verified in CI. Full paper-grade validation, several workload/date regimes, independent objective accounting, and stronger baselines remain open.
