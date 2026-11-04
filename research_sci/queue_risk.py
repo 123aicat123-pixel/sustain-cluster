@@ -10,6 +10,7 @@ from datetime import timedelta
 import math
 
 from research_sci.policies import SpatialPolicy
+from research_sci.online_calibration import OnlineResidualCalibrator
 
 
 _RESOURCE_KEYS = ("cores_req", "gpu_req", "mem_req")
@@ -89,7 +90,8 @@ class QueueRiskCarbonPolicy:
     carbon has been lower and (b) conservative queue estimate still leaves
     enough SLA slack. This is causal and heuristic, not a risk guarantee.
     """
-    NAMES = ("queue_risk_carbon", "queue_risk_defer")
+    NAMES = ("queue_risk_carbon", "queue_risk_defer",
+             "queue_calibrated_carbon", "queue_calibrated_defer")
 
     def __init__(self, name, delay_fn=None, risk_buffer_minutes=30,
                  wait_threshold_pct=5.0, max_waits=2, history_window=8):
@@ -109,6 +111,14 @@ class QueueRiskCarbonPolicy:
         self.estimated_queuing_actions = 0
         self.no_forecast = 0
         self.known_arrivals_by_dc = {}
+        self.calibrator = (OnlineResidualCalibrator()
+                           if name.startswith("queue_calibrated_") else None)
+        self.margins_used = []
+        self.calibration_ready_decisions = 0
+
+    def buffer_minutes(self):
+        return (self.calibrator.margin_minutes() if self.calibrator is not None
+                else self.risk_buffer.total_seconds() / 60)
 
     def set_visible_commitments(self, known_arrivals_by_dc):
         """Visible in-transit and same-batch committed routes only."""
@@ -158,17 +168,23 @@ class QueueRiskCarbonPolicy:
                             centers[0].dc_id)
             return fallback, True
 
-        feasible = [x for x in estimates if x[0] + self.risk_buffer <= task.sla_deadline]
+        buffer_min = self.buffer_minutes()
+        self.margins_used.append(buffer_min)
+        if (self.calibrator is not None
+                and len(self.calibrator.residuals) >= self.calibrator.min_samples):
+            self.calibration_ready_decisions += 1
+        buffer = timedelta(minutes=buffer_min)
+        feasible = [x for x in estimates if x[0] + buffer <= task.sla_deadline]
         if feasible:
             best = min(feasible, key=lambda x: (x[1], x[0], x[2]))
         else:
             best = min(estimates, key=lambda x: (x[0], x[1], x[2]))
 
-        if self.name == "queue_risk_defer" and len(self.history) >= 4:
+        if self.name in ("queue_risk_defer", "queue_calibrated_defer") and len(self.history) >= 4:
             predicted_finish, _, best_id, _ = best
             # A candidate with no true slack cannot be deferred safely even in
             # this optimistic forecast. The buffer is an explicit assumption.
-            remaining_slack = task.sla_deadline - (predicted_finish + self.risk_buffer)
+            remaining_slack = task.sla_deadline - (predicted_finish + buffer)
             if remaining_slack >= timedelta(seconds=step_seconds):
                 self.ready_for_wait += 1
                 ordered = sorted(self.history)
