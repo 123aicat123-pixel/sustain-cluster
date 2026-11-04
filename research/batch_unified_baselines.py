@@ -16,6 +16,18 @@ from pathlib import Path
 
 from research.unified_baseline_smoke import run, POLICIES, ROOT
 
+def union_csv_fieldnames(rows):
+    """Stable union of every field, preserving first-seen column ordering.
+
+    Baselines without forecast metrics and queue-aware policies with forecast
+    metrics must both remain exportable, independent of policy run order.
+    """
+    fields = list(dict.fromkeys(key for row in rows for key in row))
+    if not fields:
+        raise ValueError("no result rows for CSV export")
+    return fields
+
+
 METRICS = (
     "reported_total_cost_usd", "reported_total_carbon_kg",
     "facility_energy_kwh", "tasks_seen", "tasks_started",
@@ -100,7 +112,7 @@ def main():
     forecastpath=Path(str(prefix)+"_queue_predictions.csv")
     jsonpath.write_text(json.dumps(results,indent=2,allow_nan=False),encoding="utf8")
     with csvpath.open("w",newline="",encoding="utf8") as f:
-        writer=csv.DictWriter(f,fieldnames=list(results[0]))
+        writer=csv.DictWriter(f,fieldnames=union_csv_fieldnames(results))
         writer.writeheader()
         writer.writerows(results)
     if completed_rows:
