@@ -157,3 +157,86 @@ completed* jobs in this synthetic congestion scenario; treating it as a
 quantified risk-model failure mode (optimistic forecasts in heavy congestion),
 not merely a carbon-vs-SLA anecdote. That is a concrete foundation for a
 forecast-calibrated chance-constrained scheduling formulation.
+
+
+## New checkpoint: causal online quantile margin is mostly inactive (2026-11-04)
+
+**Verified CI:** [run 41801073460](https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/41801073460),
+commit `ad06ae0`, with unit tests, standard pilot, short stress and
+long-admission stress completed successfully. Raw experiment JSON/CSV and
+individual first-dispatch forecast JSONL are in artifact **13306874718**.
+
+### Method
+
+OnlineResidualCalibrator sees a task's prediction error only after that job
+has been marked complete by the simulator. There is no read of future actual
+completion before the next decision. It warms up on at least 20 completed
+forecast residuals; its empirical rolling 90th-percentile positive residual
+replaces the 30-minute fallback as an SLA feasibility buffer, using a
+256-completion window. Margins at dispatch are frozen for prequential audit.
+This is a heuristic adaptive quantile, **not an exchangeability/conformal or
+distribution-free risk guarantee**.
+
+### Short-window stress: 16 admission + 64 drain ticks, capacity 2%, seeds 1 and 42
+
+The calibrated policies and their respective fixed-buffer baselines had
+**identical carbon, completion, overdue and decision-time coverage** for
+both seeds. Calibrated mean decision buffer remained **30 minutes** even
+though the last learned buffer reached around 195–240 minutes after work
+finished. Calibration was **learning too late to affect routing decisions**.
+
+### Longer admission stress: 32 admission + 96 drain ticks, capacity 2%
+
+Each policy admitted 776 tasks in each seed; here are direct matched
+comparisons. Completed = 774 and unfinished overdue = 2 in every row.
+
+| Seed | Policy | Total reported carbon (kg) | Mean decision buffer (min) | Final learned buffer (min) | Decision-time margin coverage of completed jobs |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 | queue_risk_carbon | 2,921.91 | 30 | 30 fixed | 65.76% |
+| 1 | queue_calibrated_carbon | 2,921.91 | 30.00 | 285 | 65.76% |
+| 42 | queue_risk_carbon | 3,554.88 | 30 | 30 fixed | 61.50% |
+| 42 | queue_calibrated_carbon | 3,554.88 | 31.07 | 330 | 61.76% |
+| 1 | queue_risk_defer | 2,883.54 | 30 | 30 fixed | 61.89% |
+| 1 | queue_calibrated_defer | 2,883.54 | 30.00 | 285 | 61.89% |
+| 42 | queue_risk_defer | 3,596.58 | 30 | 30 fixed | 57.36% |
+| 42 | queue_calibrated_defer | 3,596.58 | 30.00 | 225 | 57.36% |
+
+For `queue_risk_carbon` in seed 42, changing the decision margin from
+30 to ~31.07 minutes **on average** increased empirical completed-only
+error coverage from 61.50% to 61.76% (2/774 additional jobs), but did
+**not** alter carbon, completed jobs, overdue jobs or the 8/96
+buffer-aware false-safe predictions among completed jobs.
+Other paired policies had identical reported coverage.
+
+Do not misreport the final buffer as what was used in earlier decisions.
+Final buffers reached 225–330 minutes **after more completions occurred**,
+not necessarily while useful scheduling decisions remained.
+
+### Scientific consequence
+
+The empirical quantile does **not** meet a 90% completed-task coverage
+target in this setup. It does not improve actual job completions or observed
+carbon metrics over fixed 30-minute buffering in these two seeds. The
+observed issue is **delayed label availability and feedback delay**, not
+evidence that all calibrated risk scheduling is ineffective. It also
+remains unknown how these methods behave on genuinely held-out, later
+temporal windows with enough arrival activity.
+
+This suggests the next rigorous experimental design should:
+
+1. Fit risk margins on an **earlier fully observed chronological calibration
+   window**, then freeze (or adapt only to new completed tasks) on a
+   later held-out evaluation window.
+2. Separately report observation delay, fraction of scheduling decisions
+   with enough completed samples, actual decision-buffer distribution,
+   SLA false-safe rates, censored jobs and throughput.
+3. Test realistic resource-pressure/arrival-rate regimes and several
+   disjoint temporal windows (not only random seeds), while preventing
+   calibration or hyperparameter tuning on the held-out test period.
+4. Compare equally completed work and actual deadline misses before
+   making CO2-efficiency claims.
+
+**Decision at this checkpoint:** do not describe online quantile buffering
+as an effective new algorithm or proceed directly to RL on these results.
+The measurable next question is how to obtain valid *pre-decision* risk
+information with delayed completion feedback.
