@@ -40,6 +40,7 @@ def audit_forecasts(finished, predictions, *, seed, policy):
             "seed": seed,
             "policy": policy,
             "job_name": task.job_name,
+            "arrival_utc": task.arrival_time.isoformat(),
             "origin_dc_id": task.origin_dc_id,
             "dest_dc_id": task.dest_dc_id,
             "is_remote": is_remote,
