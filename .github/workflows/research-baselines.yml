@@ -34,6 +34,7 @@ jobs:
       - name: Execute rule-based policy contract tests
         run: |
           mkdir -p research/results
+          set -o pipefail
           python -m unittest discover -s research/tests -p 'test_*.py' -v 2>&1 | tee research/results/baseline-contract-tests.log
       - name: Upload contract test evidence
         if: always()
