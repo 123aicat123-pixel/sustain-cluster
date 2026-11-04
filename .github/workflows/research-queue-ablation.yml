@@ -8,6 +8,11 @@ on:
       - "research/tests/test_queue_aware_nsga2.py"
       - "research/unified_baseline_smoke.py"
       - ".github/workflows/research-queue-ablation.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-queue-ablation.yml"
+      - "research/queue_aware_nsga2.py"
+      - "research/tests/test_queue_aware_nsga2.py"
   workflow_dispatch:
 
 permissions:
