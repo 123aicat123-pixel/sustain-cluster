@@ -36,9 +36,21 @@ class PressureAuditTests(unittest.TestCase):
         self.assertEqual(state["current_pending"], 0)
         self.assertEqual(state["known_inbound"], 0)
         self.assertEqual(state["predicted_sla_slack_minutes"], 140)
+        self.assertEqual(state["immediate_execution_slack_minutes"], 160)
+        self.assertFalse(state["already_unachievable_if_started_now"])
         self.assertNotIn("actual_finish", state)
         self.assertNotIn("actual_met_sla", state)
         self.assertNotIn("forecast_error_minutes", state)
+
+    def test_necessary_deadline_infeasibility_is_predecision_only(self):
+        self.task.sla_deadline = self.now + timedelta(minutes=10)
+        state = self.snapshot()
+        self.assertTrue(state["already_unachievable_if_started_now"])
+        self.assertEqual(state["immediate_execution_slack_minutes"], -10)
+        self.assertEqual(
+            state_bands(state)["immediate_execution_feasibility"],
+            "impossible_even_if_started_now"
+        )
 
     def test_known_inbound_and_queue_pressure(self):
         prior = IdentityTask("prior", duration=30, cpu=2)
