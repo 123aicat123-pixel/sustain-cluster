@@ -162,6 +162,8 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
         self.carbon_guard_interventions = 0
         self.carbon_guard_vetoes = 0
         self.carbon_guard_extra_fitness_calls = 0
+        self.predicted_start_by_task = {}
+        self.prediction_audit_calls = 0
 
     def select_batch(self, tasks, datacenters):
         if not tasks:
@@ -296,6 +298,24 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
         self.surrogate_evaluations += metrics["surrogate_evaluations"]
         self.evaluation_requests += metrics["evaluation_requests"]
         self.last_metrics = metrics
+        # Observational auditing only, performed AFTER action selection.
+        # This does not influence the chromosome or its NSGA-II fitness.
+        if self.queue_aware:
+            selected_arrivals = {dc.dc_id: [] for dc in dcs}
+            for task, dc_id, candidate_metrics in zip(tasks, chromosome, estimated):
+                delay_mins = candidate_metrics[dc_id][2]
+                selected_arrivals[dc_id].append(
+                    (task, now + timedelta(minutes=delay_mins))
+                )
+            for dc in dcs:
+                if selected_arrivals[dc.dc_id]:
+                    prediction = predict_starts(
+                        dc, selected_arrivals[dc.dc_id], now
+                    )
+                    if set(prediction).intersection(self.predicted_start_by_task):
+                        raise AssertionError("task dispatched/predicted twice")
+                    self.predicted_start_by_task.update(prediction)
+            self.prediction_audit_calls += 1
         to_action = {dc.dc_id: i+1 for i, dc in enumerate(dcs)}
         return [to_action[gene] for gene in chromosome], fallback_count
 
