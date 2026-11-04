@@ -5,6 +5,9 @@ on:
     branches: [research-baselines]
     paths:
       - ".github/workflows/research-transit-crossdate.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-transit-crossdate.yml"
   workflow_dispatch:
 
 permissions:
