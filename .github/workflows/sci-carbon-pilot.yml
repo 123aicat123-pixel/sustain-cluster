@@ -108,3 +108,27 @@ jobs:
           name: sci-carbon-risk-frontier
           path: research_sci/results/risk_frontier.*
           if-no-files-found: warn
+
+  nested-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: |
+          unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Validation selection then locked later test
+        run: |
+          python -m research_sci.nested_validation --seeds 1 42 --capacity-scale 0.02 --output research_sci/results/nested_validation.json
+      - name: Upload nested evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sci-carbon-nested-validation
+          path: research_sci/results/nested_validation.*
+          if-no-files-found: warn
