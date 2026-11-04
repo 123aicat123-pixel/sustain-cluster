@@ -50,6 +50,32 @@ def carbon_guard_choice(optimized, reference, evaluate, margin=0.0):
     return list(optimized), False
 
 
+def carbon_sla_guard_choice(optimized, reference, evaluate, margin=0.0):
+    """Proxy-carbon guard with a ZERO extra predicted-tardiness budget.
+
+    Lower proxy carbon may select the reference only when its predicted
+    total tardiness does not exceed that of the optimized chromosome.
+    This cannot guarantee true SLA compliance under future contention.
+    Returns (chromosome, intervened, risk_vetoed).
+    """
+    if not math.isfinite(margin) or margin < 0:
+        raise ValueError("carbon margin must be nonnegative and finite")
+    scores_opt = tuple(evaluate(optimized))
+    scores_ref = tuple(evaluate(reference))
+    if len(scores_opt) != 3 or len(scores_ref) != 3:
+        raise ValueError("expected three objectives")
+    if any(not math.isfinite(float(v)) for v in scores_opt + scores_ref):
+        raise ValueError("nonfinite surrogate scores")
+    baseline_carbon = float(scores_ref[1])
+    limit = baseline_carbon + margin * max(abs(baseline_carbon), 1e-9)
+    exceeds_carbon = float(scores_opt[1]) > limit + 1e-12
+    if not exceeds_carbon:
+        return list(optimized), False, False
+    if float(scores_ref[2]) > float(scores_opt[2]) + 1e-12:
+        return list(optimized), False, True
+    return list(reference), True, False
+
+
 def predict_starts(dc, arrivals, now, max_steps=672):
     """Predict new-task start timestamps by simulating CURRENT FIFO queues.
 
@@ -116,10 +142,13 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
 
     def __init__(self, *, seed=0, population=16, generations=8,
                  delay_fn=None, queue_aware=True, transfer_accounting=True,
-                 carbon_guard_margin=None):
+                 carbon_guard_margin=None, sla_safe_guard=False):
         self.queue_aware = queue_aware
         self.transfer_accounting = transfer_accounting
         self.carbon_guard_margin = carbon_guard_margin
+        self.sla_safe_guard = bool(sla_safe_guard)
+        if self.sla_safe_guard and self.carbon_guard_margin is None:
+            raise ValueError("SLA-safe guard requires explicit carbon margin")
         if carbon_guard_margin is not None and (
             not math.isfinite(carbon_guard_margin) or carbon_guard_margin < 0
         ):
@@ -131,6 +160,7 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
         super().reset()
         self.carbon_guard_checks = 0
         self.carbon_guard_interventions = 0
+        self.carbon_guard_vetoes = 0
         self.carbon_guard_extra_fitness_calls = 0
 
     def select_batch(self, tasks, datacenters):
@@ -251,9 +281,15 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
         )
         if self.carbon_guard_margin is not None:
             self.carbon_guard_checks += 1
-            chromosome, intervened = carbon_guard_choice(
-                chromosome, heuristic_seed, fitness, margin=self.carbon_guard_margin
-            )
+            if self.sla_safe_guard:
+                chromosome, intervened, vetoed = carbon_sla_guard_choice(
+                    chromosome, heuristic_seed, fitness, margin=self.carbon_guard_margin
+                )
+                self.carbon_guard_vetoes += int(vetoed)
+            else:
+                chromosome, intervened = carbon_guard_choice(
+                    chromosome, heuristic_seed, fitness, margin=self.carbon_guard_margin
+                )
             self.carbon_guard_extra_fitness_calls += 2
             self.carbon_guard_interventions += int(intervened)
         self.optimizations += 1
@@ -262,6 +298,12 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
         self.last_metrics = metrics
         to_action = {dc.dc_id: i+1 for i, dc in enumerate(dcs)}
         return [to_action[gene] for gene in chromosome], fallback_count
+
+
+class QueueAwareCarbonSlaGuard(QueueAwareNSGA2Policy):
+    def __init__(self, **kwargs):
+        super().__init__(queue_aware=True, transfer_accounting=True,
+                         carbon_guard_margin=0.0, sla_safe_guard=True, **kwargs)
 
 
 class QueueAwareCarbonGuard(QueueAwareNSGA2Policy):
