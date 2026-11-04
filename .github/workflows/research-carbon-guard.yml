@@ -1,0 +1,79 @@
+name: Research guarded queue NSGA-II sensitivity
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-carbon-guard.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-carbon-guard.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  carbon-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract Alibaba trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Unit and invariants tests
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m unittest discover -s research/tests -p 'test_*.py' -v 2>&1 | tee research/results/carbon_guard_unit.log
+      - name: Compare same cohorts with and without proxy-carbon guard
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 --seeds 42 12345 8080 \
+            --cpu-capacity-scale 0.05 \
+            --policies sla_feasible_carbon queue_nsga2 queue_nsga2_carbon_guard queue_nsga2_no_queue \
+            --output-prefix research/results/carbon_guard_pilot \
+            2>&1 | tee research/results/carbon_guard_pilot.log
+      - name: Verify complete paired tasks and guard interventions
+        run: |
+          set -o pipefail
+          python -m research.paired_task_analysis \
+            --input research/results/carbon_guard_pilot_completed_tasks.csv \
+            --reference queue_nsga2 \
+            --output research/results/carbon_guard_pair_audit.json \
+            2>&1 | tee research/results/carbon_guard_paired.log
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.load(open('research/results/carbon_guard_pilot.json'))
+          assert len(data)==12
+          for seed in (42,12345,8080):
+              cohort=[r for r in data if r['seed']==seed]
+              assert len(cohort)==4
+              assert len({r['tasks_dispatched'] for r in cohort})==1
+              assert all(r['lifecycle_conserved'] for r in cohort)
+              assert all(r['fully_drained'] for r in cohort)
+              assert all(r['fallback_assignments']==0 for r in cohort)
+              guarded=next(r for r in cohort if r['policy']=='queue_nsga2_carbon_guard')
+              baseline=next(r for r in cohort if r['policy']=='queue_nsga2')
+              assert guarded['carbon_guard_checks']==baseline['nsga2_batch_optimizations']
+              assert 0 <= guarded['carbon_guard_interventions'] <= guarded['carbon_guard_checks']
+              print('Seed',seed,'guard interventions',guarded['carbon_guard_interventions'],
+                    'out of',guarded['carbon_guard_checks'],
+                    'realized carbon delta',guarded['reported_total_carbon_kg']-baseline['reported_total_carbon_kg'],
+                    'SLA miss delta',guarded['sla_violated']-baseline['sla_violated'])
+          PY
+      - name: Archive complete experimental evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-carbon-guard-pilot
+          path: research/results/carbon_guard_*
+          if-no-files-found: warn
+          retention-days: 90
