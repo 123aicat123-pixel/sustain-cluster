@@ -22,7 +22,7 @@ METRICS = (
     "tasks_finished", "sla_met", "sla_violated",
     "pending_last", "running_last", "in_transit_last",
     "local_dispatches", "remote_dispatches",
-    "cpu_capacity_scale",
+    "cpu_capacity_scale", "completion_fraction", "fallback_fraction",
     "undispatched_at_horizon", "fallback_assignments",
     "unfinished_dispatched", "unfinished_overdue_at_horizon",
     "task_audit_sla_violation_rate", "task_audit_response_mean_minutes",
@@ -85,7 +85,9 @@ def main():
                   f"finished={row['tasks_finished']} "
                   f"still_running={row['running_last']} "
                   f"in_transit={row['in_transit_last']} "
-                  f"overdue_unfinished={row['unfinished_overdue_at_horizon']}",flush=True)
+                  f"overdue_unfinished={row['unfinished_overdue_at_horizon']} "
+                  f"fallback={row['fallback_fraction']:.1%} "
+                  f"completion={row['completion_fraction']:.1%}",flush=True)
     prefix=args.output_prefix
     prefix.parent.mkdir(parents=True,exist_ok=True)
     jsonpath=Path(str(prefix)+".json")
