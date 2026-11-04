@@ -77,3 +77,39 @@ called the final SLA violation rate if tasks remain unfinished.
 - The upstream simulation resets some random internal start variables; audit
   the relationship of workload timestamps and environment traces.
 - No actual GPU training has been performed at this stage.
+
+## Queue-aware pilot (2026-11-04)
+
+The separate `queue_risk.py` baseline estimates FIFO queue wait by simulating
+**currently known** running tasks' release times and pending tasks' resource
+demands. This is an optimistic, deterministic estimate, not a calibrated
+probability, not a guarantee, and not a forecast of future arrivals. The model
+only uses observed task queues; it never reads future carbon traces.
+
+Two additional methods are included:
+
+- `queue_risk_carbon`: carbon-minimizing spatial routing among options where
+  predicted completion plus an explicit 30-minute buffer fits SLA;
+  otherwise fastest predicted completion.
+- `queue_risk_defer`: same queue-aware placement, with causal historical-carbon
+  time-shifting only when sufficient buffered slack exists.
+
+Both use the same simulator action mapping as the existing methods. A queue
+policy can select a data center currently at capacity if the **known** running
+tasks are predicted to release resources before the job arrives; unlike simple
+`can_schedule`, this can reveal the scientific relevance of queue estimation.
+
+Capacity-pressure experiments create **temporary scaled data center YAML**
+without changing the upstream config file. Scaling is synthetic and must be
+labeled as a stress test, NOT as the original benchmark's default hardware.
+
+```bash
+python -m unittest discover -s research_sci -p 'test_*.py' -v
+python -m research_sci.run_pilot --steps 16 --drain-steps 64 --seeds 1 42 --capacity-scale 0.02 --policies lowest_carbon sla_carbon queue_risk_carbon queue_risk_defer --output research_sci/results/stress_002.json
+python -m research_sci.summarize research_sci/results/stress_002.json --reference lowest_carbon
+```
+
+**Paper-quality gate:** inspect per-seed matched admissions, unfinished and
+overdue counts, measured end-to-end task latency, queue forecast errors, and
+confidence intervals before claiming improved SLA reliability or carbon savings.
+A 30-minute buffer is an explicit heuristic parameter, not a probabilistic bound.
