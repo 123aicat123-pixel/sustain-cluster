@@ -5,6 +5,9 @@ on:
     branches: [research-baselines]
     paths:
       - ".github/workflows/research-queue-contention.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-queue-contention.yml"
   workflow_dispatch:
 
 permissions:
