@@ -5,9 +5,13 @@ on:
     branches: [research-baselines]
     paths:
       - ".github/workflows/research-sla-miss-diagnostics.yml"
+      - "research/sla_miss_diagnostics.py"
+      - "research/tests/test_sla_miss_diagnostics.py"
   pull_request:
     paths:
       - ".github/workflows/research-sla-miss-diagnostics.yml"
+      - "research/sla_miss_diagnostics.py"
+      - "research/tests/test_sla_miss_diagnostics.py"
   workflow_dispatch:
 
 permissions:
