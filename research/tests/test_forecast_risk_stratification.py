@@ -7,6 +7,7 @@ from research.forecast_risk_stratification import scenario_risk_table
 def item(seed, name, slack, actual, remote=False):
     return dict(scenario_start_month=6, scenario_start_day=15,
                 seed=seed, policy="queue_nsga2", job_name=name,
+                arrival_utc="2026-06-15T00:00:00",
                 predicted_slack_minutes=slack,
                 residual_actual_minus_prediction_minutes=20 if not actual else 0,
                 predicted_sla_met=str(slack >= 0),
@@ -38,6 +39,11 @@ class TestRiskStratification(unittest.TestCase):
         row=item(1,"x",5,True)
         with self.assertRaises(AssertionError):
             scenario_risk_table([row,row])
+
+    def test_same_name_different_arrival_is_legal(self):
+        first=item(1,"same-name",5,True)
+        second=dict(first,arrival_utc="2026-06-15T00:15:00")
+        self.assertEqual(scenario_risk_table([first,second])[0]["tasks"],2)
 
     def test_inconsistent_flag_rejected(self):
         row=item(1,"x",5,False)
