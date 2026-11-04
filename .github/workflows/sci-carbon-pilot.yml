@@ -27,7 +27,7 @@ jobs:
 
   simulator-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -40,11 +40,15 @@ jobs:
           unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
       - name: Run matched-action full-simulator pilot
         run: |
-          python -m research_sci.run_pilot --steps 8 --drain-steps 24 --seeds 42 --policies round_robin lowest_carbon fastest_finish sla_carbon slack_wait_once causal_carbon_wait
+          python -m research_sci.run_pilot --steps 8 --drain-steps 24 --seeds 42 --policies round_robin lowest_carbon fastest_finish sla_carbon slack_wait_once causal_carbon_wait queue_risk_carbon queue_risk_defer
       - name: Run paired multi-seed exploratory experiment
         run: |
-          python -m research_sci.run_pilot --steps 32 --drain-steps 96 --seeds 1 42 2026 --policies round_robin lowest_carbon fastest_finish sla_carbon slack_wait_once causal_carbon_wait --output research_sci/results/pilot_3seeds.json
+          python -m research_sci.run_pilot --steps 32 --drain-steps 96 --seeds 1 42 2026 --policies round_robin lowest_carbon fastest_finish sla_carbon slack_wait_once causal_carbon_wait queue_risk_carbon queue_risk_defer --output research_sci/results/pilot_3seeds.json
           python -m research_sci.summarize research_sci/results/pilot_3seeds.json
+      - name: Capacity stress pilot (independent matched action set)
+        run: |
+          python -m research_sci.run_pilot --steps 16 --drain-steps 64 --seeds 1 42 --capacity-scale 0.02 --policies lowest_carbon sla_carbon queue_risk_carbon queue_risk_defer --output research_sci/results/stress_002.json
+          python -m research_sci.summarize research_sci/results/stress_002.json --reference lowest_carbon
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
