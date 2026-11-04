@@ -10,6 +10,10 @@ on:
   pull_request:
     paths:
       - ".github/workflows/research-long-window.yml"
+      - "research/physical_accounting.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/batch_unified_baselines.py"
+      - "research/paired_task_analysis.py"
   workflow_dispatch:
 
 permissions:
