@@ -23,6 +23,7 @@ import yaml
 
 from train_SAC_agent import make_env
 from research.lifecycle_audit import audit_lifecycle
+from research.physical_accounting import validate_datacenter_step
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from utils.task_assignment_strategies import (
@@ -168,6 +169,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
             summary["steps_completed"] += 1
             pending = 0
             for dc_info in info["datacenter_infos"].values():
+                validate_datacenter_step(dc_info)
                 c = dc_info["__common__"]
                 summary["facility_energy_kwh"] += float(c["energy_consumption_kwh"])
                 summary["facility_cost_usd"] += float(c["energy_cost_USD"])
