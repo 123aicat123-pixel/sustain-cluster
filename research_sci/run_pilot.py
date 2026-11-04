@@ -22,6 +22,7 @@ import numpy as np
 import yaml
 
 from research_sci.policies import SpatialPolicy
+from research_sci.temporal import TemporalPolicy
 from train_SAC_agent import make_env
 
 
@@ -66,7 +67,8 @@ def run_once(name, seed, steps, drain_steps):
                 return [] if time >= cutoff else original_loader(time)
 
             env.cluster_manager.get_tasks_for_timestep = fixed_admission
-            policy = SpatialPolicy(name)
+            policy = (TemporalPolicy(name) if name in TemporalPolicy.NAMES
+                      else SpatialPolicy(name))
             id_to_action = {
                 dc.dc_id: index + 1
                 for index, dc in enumerate(env.cluster_manager.datacenters.values())
@@ -79,7 +81,7 @@ def run_once(name, seed, steps, drain_steps):
                 "drain_steps": drain_steps,
                 "tasks_dispatched": 0, "tasks_finished": 0,
                 "sla_met": 0, "sla_violated": 0,
-                "fallback_to_origin": 0,
+                "fallback_to_origin": 0, "defer_actions": 0,
                 "facility_carbon_kg": 0.0, "network_carbon_kg": 0.0,
                 "facility_cost_usd": 0.0, "network_cost_usd": 0.0,
                 "facility_energy_kwh": 0.0, "network_energy_kwh": 0.0,
@@ -97,6 +99,10 @@ def run_once(name, seed, steps, drain_steps):
                         env.current_time, env.cluster_manager,
                         step_seconds=int(env.time_step.total_seconds()),
                     )
+                    if dc_id == 0:
+                        actions.append(0)  # Temporal policy defers this task
+                        result["defer_actions"] += 1
+                        continue
                     if dc_id not in id_to_action:
                         raise AssertionError("Policy returned an unknown data center")
                     actions.append(id_to_action[dc_id])
@@ -150,6 +156,7 @@ def run_once(name, seed, steps, drain_steps):
             result["running_last"] = len(running)
             result["in_transit_last"] = len(in_transit)
             result["waiting_last"] = len(waiting)
+            result["deferral_eligible"] = getattr(policy, "ready_for_wait", 0)
             result["unfinished_at_horizon"] = len(dispatched - finished)
             result["unfinished_overdue"] = sum(
                 task.sla_deadline < env.current_time for task in dispatched - finished
@@ -178,7 +185,7 @@ def main():
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--drain-steps", type=int, default=24)
     parser.add_argument("--seeds", nargs="+", type=int, default=[42])
-    parser.add_argument("--policies", nargs="+", choices=SpatialPolicy.NAMES,
+    parser.add_argument("--policies", nargs="+", choices=SpatialPolicy.NAMES + TemporalPolicy.NAMES,
                         default=list(SpatialPolicy.NAMES))
     parser.add_argument("--output", type=Path,
                         default=ROOT / "research_sci/results/pilot.json")
