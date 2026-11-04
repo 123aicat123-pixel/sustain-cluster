@@ -113,3 +113,30 @@ python -m research_sci.summarize research_sci/results/stress_002.json --referenc
 overdue counts, measured end-to-end task latency, queue forecast errors, and
 confidence intervals before claiming improved SLA reliability or carbon savings.
 A 30-minute buffer is an explicit heuristic parameter, not a probabilistic bound.
+
+## Finish-time calibration audit
+
+The optional `--audit-predictions` flag computes a **decision-time** finish
+forecast for each actually dispatched task, using current running jobs, FIFO
+pending queues, already-in-transit routes and all earlier routes in the same
+action batch. It records a task's *first committed dispatch* estimate only.
+
+The audit compares forecast timestamps with task `finish_time` **only after
+the simulator reports the task completed**; uncompleted tasks are censored
+rather than counted as correct. Forecast-unavailable tasks are separately
+counted. Reported outputs include MAE, signed bias (positive means an
+optimistically early forecast), 90th-percentile absolute error, the proportion
+of completed tasks exceeding the 30-minute forecast buffer, and a
+**completed-only** false-safe-SLA rate. Per-task JSONL is stored next to the
+results as `<output-stem>_forecasts/<policy>_seed<seed>.jsonl`.
+
+The existing future-arrival exclusion remains important: the model can see
+only already-known arrivals; it has no access to the future workload trace.
+These are empirical diagnostics, **not calibrated probability bounds**.
+Unfinished/censored tasks must be included in any later end-to-end SLA
+assessment rather than silently removed. No inference should be made from
+calibration on completed-only tasks under heavy censoring.
+
+```bash
+python -m research_sci.run_pilot --steps 16 --drain-steps 64 --seeds 1 42 --audit-predictions --capacity-scale 0.02 --policies lowest_carbon sla_carbon queue_risk_carbon queue_risk_defer --output research_sci/results/stress_002.json
+```
