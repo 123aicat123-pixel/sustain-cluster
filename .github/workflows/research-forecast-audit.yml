@@ -65,6 +65,14 @@ jobs:
                     'optimistic fraction',row['forecast_overoptimistic_fraction'])
           print('Forecast audit samples:',len(samples))
           PY
+      - name: Stratify false-safe risk by calendar seed slack and routing
+        run: |
+          set -o pipefail
+          python -m unittest discover -s research/tests -p 'test_forecast_risk_stratification.py' -v
+          python -m research.forecast_risk_stratification \
+            --input research/results/forecast_jun15_queue_predictions.csv \
+            --output research/results/forecast_jun15_risk_strata.json \
+            2>&1 | tee research/results/forecast_jun15_risk_strata.log
       - name: Preserve per-task raw forecasts and observations
         if: always()
         uses: actions/upload-artifact@v4
