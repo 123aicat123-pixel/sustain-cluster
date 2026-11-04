@@ -12,7 +12,10 @@ reproduction or a claim that any scheduling algorithm is scientifically valid.
   original cost/carbon reward components consume task proxies instead of
   recorded simulator metrics. These tests are expected to **pass** while
   demonstrating a measurement mismatch.
-- CI compiles three critical Python modules and runs these selector tests.
+- `research/unified_baseline_smoke.py`: runs the existing baseline selector implementations
+  through a common per-task environment action pathway with transmission delay.
+- CI compiles three critical Python modules, runs selector/adapter tests, and
+  runs both native and adapted short full-simulator checks.
 - The upstream physics, datasets, policy implementations, and YAML defaults
   remain unchanged. One targeted change to `train_rl_agent.py` now forwards
   `sim_cfg` into `TaskSchedulingEnv`, which previously silently ignored the
@@ -44,6 +47,11 @@ reproduction or a claim that any scheduling algorithm is scientifically valid.
    destination's pending queue, while the manual RL environment explicitly
    puts assigned tasks into `in_transit_tasks` after delay. This is a
    suspected algorithm-comparison asymmetry requiring direct reproduction.
+   `unified_baseline_smoke.py` supplies an **adapted** RBC comparison under
+   `manual_rl` so all chosen routes enter the same `in_transit_tasks` queue.
+   It is not equivalent to native RBC mode: the adapter counts fallback
+   decisions when the upstream strategy returns no valid destination.
+   Run both modes and explicitly label which experiment was used.
 6. Lightweight contract tests do not validate execution completion, SLA
    penalties, network transmission, energy, carbon, or cross-seed
    repeatability. A full simulation audit remains mandatory.
@@ -60,10 +68,14 @@ reproduction or a claim that any scheduling algorithm is scientifically valid.
 
 ## Execute locally
 ```bash
-python -m pip install numpy
+python -m pip install numpy pandas
 python -m compileall -q utils/task_assignment_strategies.py envs/task_scheduling_env.py simulation/cluster_manager.py
 python -m unittest discover -s research/tests -p 'test_*.py' -v
 ```
+
+**Scientific status:** Full-simulator short smoke is executable, but not a
+paper-grade comparison. The unified adapter is currently under verification;
+long-window accounting and invariants remain to be validated.
 
 **Scientific status:** Not yet reproduced. No baseline performance numbers
 should be quoted until a full and independently checked simulation runs.
