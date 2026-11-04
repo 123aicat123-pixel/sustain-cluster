@@ -10,10 +10,17 @@ from research.queue_aware_nsga2 import (
 
 
 def task(name, duration=10, cores=2):
-    return SimpleNamespace(
-        job_name=name, duration=duration, cores_req=cores, gpu_req=0,
-        mem_req=0, bandwidth_gb=0, origin_dc_id=1,
-    )
+    # The actual rl_components.task.Task is identity-hashable. Use the
+    # same semantics here: SimpleNamespace itself is unhashable.
+    t = type("DummyTask", (), {})()
+    t.job_name=name
+    t.duration=duration
+    t.cores_req=cores
+    t.gpu_req=0
+    t.mem_req=0
+    t.bandwidth_gb=0
+    t.origin_dc_id=1
+    return t
 
 
 def dc(available=4, total=4, pending=(), running=()):
