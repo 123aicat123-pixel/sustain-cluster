@@ -5,6 +5,9 @@ on:
     branches: [research-baselines]
     paths:
       - ".github/workflows/research-carbon-attribution.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-carbon-attribution.yml"
   workflow_dispatch:
 
 permissions:
