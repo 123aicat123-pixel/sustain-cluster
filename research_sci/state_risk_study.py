@@ -91,7 +91,9 @@ def run_study(seeds,scales,starts,output):
                     "sla_deadline_failures":row["test_deadline_failures_including_overdue"],
                     "cpu_strata":row["test_state_risk_by_pressure"]["cpu_utilization"],
                     "queue_strata":row["test_state_risk_by_pressure"]["pending_queue"],
-                    "inbound_strata":row["test_state_risk_by_pressure"]["committed_inbound"]
+                    "inbound_strata":row["test_state_risk_by_pressure"]["committed_inbound"],
+                    "immediate_feasibility_strata":row["test_state_risk_by_pressure"]["immediate_execution_feasibility"],
+                    "predicted_slack_strata":row["test_state_risk_by_pressure"]["predicted_sla_slack"]
                 },allow_nan=False),flush=True)
     evidence=analyze_pressure(rows)
     path=Path(output)
