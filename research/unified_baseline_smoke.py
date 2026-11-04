@@ -70,9 +70,11 @@ def choose_actions(policy, tasks, datacenters):
     return actions, fallbacks
 
 
-def run(policy_name, seed, steps, drain_steps=0, completed_records=None):
+def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_capacity_scale=1.0):
     if policy_name not in POLICIES:
         raise ValueError(f"Unknown baseline: {policy_name}")
+    if not 0 < cpu_capacity_scale <= 1:
+        raise ValueError("CPU capacity scale must be within (0,1]")
     if steps < 1 or drain_steps < 0 or steps + drain_steps > 7 * 24 * 4:
         raise ValueError("steps must be positive, drain nonnegative, total <= 672")
     # Current trace loader uses module-level PRNGs. Reseed before each policy to
@@ -88,11 +90,19 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None):
         "disable_defer_action": False, "shuffle_datacenters": False,
         "use_tensorboard": False,
     })
+    dc_cfg = copy.deepcopy(yaml.safe_load(
+        (ROOT / "configs/env/datacenters.yaml").read_text(encoding="utf8")
+    ))
+    for dc_cfg_row in dc_cfg["datacenters"]:
+        original = int(dc_cfg_row["total_cores"])
+        dc_cfg_row["total_cores"] = max(1, int(round(original * cpu_capacity_scale)))
     with tempfile.TemporaryDirectory() as temp:
         cfgpath = Path(temp) / "sim_config.yaml"
+        dcpath = Path(temp) / "dc_config.yaml"
+        dcpath.write_text(yaml.safe_dump(dc_cfg), encoding="utf8")
         cfgpath.write_text(yaml.safe_dump(config), encoding="utf8")
         env = make_env(
-            str(cfgpath), str(ROOT / "configs/env/datacenters.yaml"),
+            str(cfgpath), str(dcpath),
             str(ROOT / "configs/env/reward_config.yaml"),
             writer=None, logger=None,
         )
@@ -114,6 +124,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None):
         summary = {
             "policy": policy_name, "routing": "shared_action_path_local_immediate_v2",
             "seed": seed, "steps_requested": steps, "steps_completed": 0,
+            "cpu_capacity_scale": cpu_capacity_scale,
             "admission_steps": steps, "drain_steps": drain_steps,
             "tasks_seen": 0, "tasks_dispatched": 0,
             "local_dispatches": 0, "remote_dispatches": 0,
@@ -247,13 +258,14 @@ def main():
     p.add_argument("--steps", type=int, default=16)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--drain-steps", type=int, default=0)
+    p.add_argument("--cpu-capacity-scale", type=float, default=1.0)
     p.add_argument(
         "--policies", nargs="+", choices=sorted(POLICIES), 
         default=["lowest_carbon", "lowest_price", "round_robin"]
     )
     p.add_argument("--output", type=Path, default=ROOT / "research/results/unified_baseline_smoke.json")
     args = p.parse_args()
-    out = [run(policy, args.seed, args.steps, drain_steps=args.drain_steps) for policy in args.policies]
+    out = [run(policy, args.seed, args.steps, drain_steps=args.drain_steps, cpu_capacity_scale=args.cpu_capacity_scale) for policy in args.policies]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(out, indent=2, allow_nan=False), encoding="utf8")
     print(json.dumps(out, indent=2, allow_nan=False))
