@@ -170,3 +170,46 @@ quantile is **NOT conformal / distribution-free coverage**: online policy
 feedback, nonstationarity and censoring invalidate an unconditional guarantee.
 Its `alpha=0.1` is a heuristic **target**, not a certified 10% violation
 bound. Interpret controlled risk only after held-out chronological evaluation.
+
+
+## Chronologically separated frozen-risk holdout (next pilot)
+
+`chronological_eval.py` is a separate workflow from the existing
+same-window online experiments. Two paired treatments are run on **separate
+recreated simulators with identical seed and calibration actions**:
+
+- `fixed_30`: fixed 30-minute risk buffer on the later unseen test cohort.
+- `precalibrated_frozen`: a 90th-percentile empirical positive completion-time
+  residual buffer estimated from **earlier completed jobs only** and frozen
+  before the first held-out arrival. Minimum 20 usable training residuals.
+
+The timeline has four consecutive segments:
+**16 training-admission ticks -> 128 no-admission drain ticks -> 16 held-out
+admission ticks -> 96 held-out drain ticks**. All segments run on one
+simulation clock per treatment, without rewinding the forecasted weather,
+carbon, workload or resource state. The simulator *must* report zero training
+jobs still in progress before held-out admissions begin; otherwise the
+experiment fails. A clean-gap test is intentional to isolate the two cohorts.
+
+The evaluator checks matching training-route signatures, matching training
+admissions/completions, matching test admission fingerprints and counts,
+identical phase boundaries, and no overlap between calibration and held-out
+task objects. The learned risk margin is unavailable to the test until
+training has finished, and it is never updated from test completion labels.
+It writes **test-window-only** carbon and cost, completed/unfinished/overdue
+counts, forecast coverage and false-safe rate, plus the count of actual
+data-center choices changed in the paired treatments.
+
+```bash
+python -m research_sci.chronological_eval --seeds 1 42 \
+  --calibration-steps 16 --gap-steps 128 --test-steps 16 \
+  --drain-steps 96 --capacity-scale 0.02 \
+  --output research_sci/results/chronological.json
+```
+
+**Strict limitations:** this is a pilot with just two seeds and one
+chronological region, synthetic capacity reduction, and a non-exchangeable
+empirical quantile. The 90% target is **not** a coverage guarantee. It is
+also a cohort-separation experiment rather than a model trained on a distinct
+calendar month; larger disjoint windows and outside-sample workload seasons
+are required before publication-level claims.
