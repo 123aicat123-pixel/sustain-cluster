@@ -66,9 +66,21 @@ def window_summary(rows, selected, index):
             "equal_completed_work":equal,
             "reference_carbon_kg":base["test_total_carbon_kg"],
             "chosen_carbon_kg":chosen["test_total_carbon_kg"],
-            "carbon_change_kg":chosen["test_total_carbon_kg"]-base["test_total_carbon_kg"],
-            "carbon_change_pct":100*(chosen["test_total_carbon_kg"]
-                                    /base["test_total_carbon_kg"]-1),
+            # Absolute totals are recorded for transparency, but a carbon
+            # improvement percentage is NOT interpretable if finished
+            # workloads differ. No false 'wins' from unfinished work.
+            "carbon_change_kg_if_comparable":(
+                chosen["test_total_carbon_kg"]-base["test_total_carbon_kg"]
+                if equal else None),
+            "carbon_change_pct":(
+                100*(chosen["test_total_carbon_kg"]
+                     /base["test_total_carbon_kg"]-1) if equal else None),
+            "reference_completed":base["test_tasks_finished"],
+            "chosen_completed":chosen["test_tasks_finished"],
+            "reference_unfinished":base["test_unfinished"],
+            "chosen_unfinished":chosen["test_unfinished"],
+            "reference_overdue_unfinished":base["test_unfinished_overdue"],
+            "chosen_overdue_unfinished":chosen["test_unfinished_overdue"],
             "reference_deadline_failures":base["test_deadline_failures_including_overdue"],
             "chosen_deadline_failures":chosen["test_deadline_failures_including_overdue"],
             "change_in_deadline_failures":(
@@ -88,12 +100,12 @@ def window_summary(rows, selected, index):
         "mean_deadline_failure_delta":(
             sum(r["change_in_deadline_failures"] for r in comparisons)/n),
         "both_objectives_nonworse_for_every_seed":(
-            comparable and all(r["carbon_change_kg"]<=0
+            comparable and all(r["carbon_change_kg_if_comparable"]<=0
                                and r["change_in_deadline_failures"]<=0
                                for r in comparisons)),
         "mean_carbon_lower_and_mean_deadline_failures_nonworse":(
             comparable
-            and sum(r["carbon_change_kg"] for r in comparisons)<0
+            and sum(r["carbon_change_kg_if_comparable"] for r in comparisons)<0
             and sum(r["change_in_deadline_failures"] for r in comparisons)<=0),
     }
 
@@ -143,6 +155,9 @@ def run_robustness(seeds, output, cal_steps=16, val_gap=128, val_steps=16,
                     "seed":seed,"treatment":treatment,
                     "misses":row["test_deadline_failures_including_overdue"],
                     "finished":row["test_tasks_finished"],
+                    "admitted":row["test_tasks_admitted"],
+                    "unfinished":row["test_unfinished"],
+                    "overdue_unfinished":row["test_unfinished_overdue"],
                     "carbon_kg":row["test_total_carbon_kg"],
                     "safe_flags":row["test_decision_margin_predicted_safe_completed"],
                     "test_start":row["test_window_start"],
