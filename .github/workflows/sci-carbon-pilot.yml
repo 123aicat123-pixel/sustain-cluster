@@ -40,10 +40,10 @@ jobs:
           unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
       - name: Run matched-action full-simulator pilot
         run: |
-          python -m research_sci.run_pilot --steps 8 --drain-steps 24 --seeds 42
+          python -m research_sci.run_pilot --steps 8 --drain-steps 24 --seeds 42 --policies round_robin lowest_carbon fastest_finish sla_carbon slack_wait_once causal_carbon_wait
       - name: Run paired multi-seed exploratory experiment
         run: |
-          python -m research_sci.run_pilot --steps 32 --drain-steps 96 --seeds 1 42 2026 --output research_sci/results/pilot_3seeds.json
+          python -m research_sci.run_pilot --steps 32 --drain-steps 96 --seeds 1 42 2026 --policies round_robin lowest_carbon fastest_finish sla_carbon slack_wait_once causal_carbon_wait --output research_sci/results/pilot_3seeds.json
           python -m research_sci.summarize research_sci/results/pilot_3seeds.json
       - name: Upload results
         if: always()
