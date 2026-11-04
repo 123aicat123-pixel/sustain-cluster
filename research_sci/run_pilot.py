@@ -107,6 +107,8 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
             dispatched = set()
             finished = set()
             first_dispatch_forecast = {}
+            calibrator = getattr(policy, "calibrator", None)
+            record_predictions = audit_predictions or calibrator is not None
             dc_by_id = {dc.dc_id: dc for dc in env.cluster_manager.datacenters.values()}
 
             for _ in range(steps + drain_steps):
@@ -158,7 +160,7 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
                             env.current_time + env.time_step,
                             env.current_time + timedelta(seconds=delay),
                         )
-                        if audit_predictions:
+                        if record_predictions:
                             tick_seconds = int(env.time_step.total_seconds())
                             arrival_ticks = max(1, math.ceil(delay / tick_seconds))
                             forecast = predict_finish(
@@ -168,7 +170,7 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
                             )
                         else:
                             forecast = None
-                    if audit_predictions:
+                    if record_predictions:
                         first_dispatch_forecast[task] = forecast
                     commitments[effective_dc_id].append((arrival_eta, task))
 
@@ -188,6 +190,19 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
                     if finished.intersection(completed_here):
                         raise AssertionError("Task completed more than once")
                     finished.update(completed_here)
+                    if calibrator is not None:
+                        # Updates occur strictly AFTER the current step
+                        # executes, hence no new completion leaks into
+                        # an earlier decision in that same timestep.
+                        for completed_task in completed_here:
+                            if completed_task not in first_dispatch_forecast:
+                                raise AssertionError("Completed task missing first-dispatch forecast")
+                            calibrator.observe_completed(
+                                completed_task,
+                                first_dispatch_forecast[completed_task],
+                                completed_task.finish_time,
+                                env.current_time
+                            )
 
                 # Upstream info fields 'total_*' are TRANSMISSION ONLY.
                 result["network_carbon_kg"] += float(info["total_emissions_kg"])
@@ -220,6 +235,13 @@ def run_once(name, seed, steps, drain_steps, capacity_scale=1.0,
             result["in_transit_last"] = len(in_transit)
             result["waiting_last"] = len(waiting)
             result["deferral_eligible"] = getattr(policy, "ready_for_wait", 0)
+            if calibrator is not None:
+                result.update(calibrator.summary())
+                result["calibration_ready_decisions"] = policy.calibration_ready_decisions
+                result["calibration_mean_buffer_minutes"] = (
+                    sum(policy.margins_used) / len(policy.margins_used)
+                    if policy.margins_used else None
+                )
             if audit_predictions:
                 metrics, forecast_rows = summarize_forecasts(
                     first_dispatch_forecast, finished, buffer_minutes=30)
@@ -308,6 +330,15 @@ def main():
                         "forecast_p90_abs_error_minutes", "forecast_buffer_coverage",
                         "forecast_predicted_safe_completed",
                         "forecast_false_safe_completed", "forecast_false_safe_rate"
+                    )
+                })
+            if "calibration_buffer_last_minutes" in row:
+                report.update({
+                    key: row[key] for key in (
+                        "calibration_completed_observations",
+                        "calibration_ready_decisions",
+                        "calibration_buffer_last_minutes",
+                        "calibration_mean_buffer_minutes",
                     )
                 })
             print(json.dumps(report, allow_nan=False), flush=True)
