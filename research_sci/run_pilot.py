@@ -1,9 +1,9 @@
 """Matched-action SustainCluster baseline pilot (NOT publication-grade results).
 
-All policies select a data-center action per task and run through the SAME
-TaskSchedulingEnv.step manual_rl routing path. This avoids the upstream
-native-rule-vs-RL transmission-path asymmetry. No policy defers tasks in this
-pilot; future temporal policies require a separate action-matched experiment.
+All policies select a per-task action in the SAME TaskSchedulingEnv.step
+manual_rl routing path. Spatial methods dispatch immediately, while causal
+risk/time-shift policies can defer (action 0). The legal action set and
+transmission pathway are common across all methods.
 
 Usage:
 python -m research_sci.run_pilot --steps 8 --drain-steps 24 --seeds 42
@@ -23,6 +23,7 @@ import yaml
 
 from research_sci.policies import SpatialPolicy
 from research_sci.temporal import TemporalPolicy
+from research_sci.queue_risk import QueueRiskCarbonPolicy
 from train_SAC_agent import make_env
 
 
@@ -32,9 +33,11 @@ DC_CONFIG = ROOT / "configs/env/datacenters.yaml"
 REWARD_CONFIG = ROOT / "configs/env/reward_config.yaml"
 
 
-def run_once(name, seed, steps, drain_steps):
+def run_once(name, seed, steps, drain_steps, capacity_scale=1.0):
     if steps < 1 or drain_steps < 1:
         raise ValueError("Both admission and drain steps must be positive")
+    if not (0 < capacity_scale <= 1.0):
+        raise ValueError("Capacity scale must be in (0, 1]")
 
     random.seed(seed)
     np.random.seed(seed)
@@ -51,7 +54,16 @@ def run_once(name, seed, steps, drain_steps):
     with tempfile.TemporaryDirectory(prefix="sci_pilot_") as tmp:
         cfg = Path(tmp) / "simulation.yaml"
         cfg.write_text(yaml.safe_dump(config), encoding="utf-8")
-        env = make_env(str(cfg), str(DC_CONFIG), str(REWARD_CONFIG),
+        dc_cfg_path = DC_CONFIG
+        if capacity_scale != 1.0:
+            dc_cfg = copy.deepcopy(yaml.safe_load(DC_CONFIG.read_text(encoding="utf-8")))
+            for dc in dc_cfg["datacenters"]:
+                for key in ("total_cores", "total_gpus", "total_mem"):
+                    original = dc[key]
+                    dc[key] = max(1, int(original * capacity_scale))
+            dc_cfg_path = Path(tmp) / "datacenters.yaml"
+            dc_cfg_path.write_text(yaml.safe_dump(dc_cfg), encoding="utf-8")
+        env = make_env(str(cfg), str(dc_cfg_path), str(REWARD_CONFIG),
                        writer=None, logger=None)
         try:
             if env.single_action_mode or env.disable_defer_action:
@@ -67,7 +79,8 @@ def run_once(name, seed, steps, drain_steps):
                 return [] if time >= cutoff else original_loader(time)
 
             env.cluster_manager.get_tasks_for_timestep = fixed_admission
-            policy = (TemporalPolicy(name) if name in TemporalPolicy.NAMES
+            policy = (QueueRiskCarbonPolicy(name) if name in QueueRiskCarbonPolicy.NAMES
+                      else TemporalPolicy(name) if name in TemporalPolicy.NAMES
                       else SpatialPolicy(name))
             id_to_action = {
                 dc.dc_id: index + 1
@@ -77,7 +90,7 @@ def run_once(name, seed, steps, drain_steps):
                 raise AssertionError("Duplicate data center IDs")
 
             result = {
-                "policy": name, "seed": seed, "admission_steps": steps,
+                "policy": name, "seed": seed, "capacity_scale": capacity_scale, "admission_steps": steps,
                 "drain_steps": drain_steps,
                 "tasks_dispatched": 0, "tasks_finished": 0,
                 "sla_met": 0, "sla_violated": 0,
@@ -157,6 +170,8 @@ def run_once(name, seed, steps, drain_steps):
             result["in_transit_last"] = len(in_transit)
             result["waiting_last"] = len(waiting)
             result["deferral_eligible"] = getattr(policy, "ready_for_wait", 0)
+            result["estimated_queue_actions"] = getattr(policy, "estimated_queuing_actions", 0)
+            result["queue_no_forecast"] = getattr(policy, "no_forecast", 0)
             result["unfinished_at_horizon"] = len(dispatched - finished)
             result["unfinished_overdue"] = sum(
                 task.sla_deadline < env.current_time for task in dispatched - finished
@@ -185,7 +200,10 @@ def main():
     parser.add_argument("--steps", type=int, default=8)
     parser.add_argument("--drain-steps", type=int, default=24)
     parser.add_argument("--seeds", nargs="+", type=int, default=[42])
-    parser.add_argument("--policies", nargs="+", choices=SpatialPolicy.NAMES + TemporalPolicy.NAMES,
+    parser.add_argument("--capacity-scale", type=float, default=1.0,
+                        help="Scale DC resource totals uniformly; research stress test only")
+    parser.add_argument("--policies", nargs="+",
+                        choices=SpatialPolicy.NAMES + TemporalPolicy.NAMES + QueueRiskCarbonPolicy.NAMES,
                         default=list(SpatialPolicy.NAMES))
     parser.add_argument("--output", type=Path,
                         default=ROOT / "research_sci/results/pilot.json")
@@ -197,7 +215,7 @@ def main():
     rows = []
     for seed in args.seeds:
         for policy in args.policies:
-            row = run_once(policy, seed, args.steps, args.drain_steps)
+            row = run_once(policy, seed, args.steps, args.drain_steps, capacity_scale=args.capacity_scale)
             rows.append(row)
             print(json.dumps({
                 "seed": seed, "policy": policy,
@@ -205,6 +223,8 @@ def main():
                 "completed": row["tasks_finished"],
                 "unfinished": row["unfinished_at_horizon"],
                 "overdue": row["unfinished_overdue"],
+                "defer": row["defer_actions"],
+                "queue_predictions": row["estimated_queue_actions"],
             }), flush=True)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
