@@ -61,6 +61,10 @@ jobs:
           mkdir -p research/results
           set -o pipefail
           python -m research.smoke_original_baselines --steps 8 --seed 42 2>&1 | tee research/results/full-simulator-smoke.log
+      - name: Run matched routing adapter smoke
+        run: |
+          set -o pipefail
+          python -m research.unified_baseline_smoke --steps 16 --seed 42 2>&1 | tee research/results/unified-baseline-smoke.log
       - name: Archive full-simulator results
         if: always()
         uses: actions/upload-artifact@v4
