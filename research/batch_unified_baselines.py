@@ -22,6 +22,7 @@ METRICS = (
     "tasks_finished", "sla_met", "sla_violated",
     "pending_last", "running_last", "in_transit_last",
     "local_dispatches", "remote_dispatches",
+    "cpu_capacity_scale",
     "undispatched_at_horizon", "fallback_assignments",
     "unfinished_dispatched", "unfinished_overdue_at_horizon",
     "task_audit_sla_violation_rate", "task_audit_response_mean_minutes",
@@ -55,6 +56,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=32)
     parser.add_argument("--drain-steps", type=int, default=0)
+    parser.add_argument("--cpu-capacity-scale", type=float, default=1.0)
     parser.add_argument("--seeds", nargs="+", type=int, default=[1,42,2026])
     parser.add_argument(
         "--policies", nargs="+", choices=sorted(POLICIES),
@@ -75,7 +77,7 @@ def main():
     # coupling between consecutive policies.
     for seed in args.seeds:
         for policy in args.policies:
-            row = run(policy, seed, args.steps, drain_steps=args.drain_steps, completed_records=completed_rows)
+            row = run(policy, seed, args.steps, drain_steps=args.drain_steps, completed_records=completed_rows, cpu_capacity_scale=args.cpu_capacity_scale)
             results.append(row)
             print(f"completed: seed={seed} policy={policy} "
                   f"cost={row['reported_total_cost_usd']:.3f} "
