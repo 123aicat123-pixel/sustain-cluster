@@ -6,13 +6,17 @@ reproduction or a claim that any scheduling algorithm is scientifically valid.
 ## Current scope
 - `research/tests/test_rule_based_baselines.py`: small deterministic
   selector-level tests using mocked data centers, with no workload dataset.
+- `research/tests/test_environment_factory_contract.py`: guards the
+  simulator configuration forwarding path in `train_rl_agent.make_env`.
 - `research/tests/test_reward_signal_contracts.py`: characterizes how the
   original cost/carbon reward components consume task proxies instead of
   recorded simulator metrics. These tests are expected to **pass** while
   demonstrating a measurement mismatch.
 - CI compiles three critical Python modules and runs these selector tests.
-- The upstream simulator, its datasets, configs, and original policies are
-  deliberately unchanged at this stage.
+- The upstream physics, datasets, policy implementations, and YAML defaults
+  remain unchanged. One targeted change to `train_rl_agent.py` now forwards
+  `sim_cfg` into `TaskSchedulingEnv`, which previously silently ignored the
+  YAML action/defer flags during environment construction.
 
 ## Important audit findings before comparing algorithms
 1. `utils/task_assignment_strategies.py` has multiple original strategies.
@@ -22,8 +26,10 @@ reproduction or a claim that any scheduling algorithm is scientifically valid.
 2. The fork's current `configs/env/sim_config.yaml` has
    `disable_defer_action: true` and `single_action_mode: true`.
    Under this configuration, learned agents cannot use deferral, and a
-   single decision is shared across tasks. This must be normalized before
-   comparing task-level deferral policies.
+   single decision is shared across tasks. `train_rl_agent.make_env` originally
+   failed to forward these flags to the environment; this branch fixes that
+   specific factory defect. Other training entrypoints still require audit.
+   Action sets must be normalized before comparing task-level deferral policies.
 3. The original `EnergyPriceReward` and `CarbonEmissionsReward` do not
    read actual `cluster_info` energy/cost/emissions, network costs, or
    SLA statistics; they use `cores_req * duration / 10000` proxies.
