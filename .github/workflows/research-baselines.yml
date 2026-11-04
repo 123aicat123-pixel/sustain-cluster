@@ -65,6 +65,10 @@ jobs:
         run: |
           set -o pipefail
           python -m research.unified_baseline_smoke --steps 16 --seed 42 2>&1 | tee research/results/unified-baseline-smoke.log
+      - name: Run paired multi-seed adapted baselines (exploratory)
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines --steps 32 --seeds 1 42 2026 2>&1 | tee research/results/unified-batch.log
       - name: Archive full-simulator results
         if: always()
         uses: actions/upload-artifact@v4
