@@ -60,3 +60,27 @@ jobs:
           name: sci-carbon-pilot-results
           path: research_sci/results/
           if-no-files-found: warn
+
+  chronological-holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: |
+          unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Run leakage-audited chronological holdout
+        run: |
+          python -m research_sci.chronological_eval --seeds 1 42 --calibration-steps 16 --gap-steps 128 --test-steps 16 --drain-steps 96 --capacity-scale 0.02 --output research_sci/results/chronological.json
+      - name: Upload chronological holdout
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sci-carbon-chronological-holdout
+          path: research_sci/results/chronological.*
+          if-no-files-found: warn
