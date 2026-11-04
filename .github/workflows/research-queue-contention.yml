@@ -1,0 +1,82 @@
+name: Research queue-aware contention sensitivity
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-queue-contention.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contention:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract task trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Run identical admission tasks under two capacity scales
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          for scale in 0.02 0.05; do
+            key=${scale//./}
+            python -m research.batch_unified_baselines \
+              --steps 16 --drain-steps 112 --seeds 42 \
+              --cpu-capacity-scale "$scale" \
+              --policies sla_feasible_carbon nsga2_surrogate queue_nsga2 queue_nsga2_no_queue queue_nsga2_no_transfer \
+              --output-prefix "research/results/queue_stress_${key}" \
+              2>&1 | tee "research/results/queue_stress_${key}.log"
+          done
+      - name: Guard cohorts and distinguish incomplete completion
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for scale in ('002','005'):
+              stem=f'research/results/queue_stress_{scale}'
+              rows=json.load(open(stem+'.json',encoding='utf-8'))
+              assert len(rows)==5
+              assert len({r['tasks_dispatched'] for r in rows})==1
+              assert all(r['lifecycle_conserved'] for r in rows)
+              comparable=all(r['fully_drained'] for r in rows)
+              eligible=all(r['eligible_for_full_cohort_comparison'] for r in rows)
+              report={
+                  'scale':scale,'all_drained':comparable,
+                  'all_within_fallback_gate':eligible,
+                  'policies':[{'name':r['policy'],'finished':r['tasks_finished'],
+                               'unfinished':r['unfinished_dispatched'],
+                               'fallback_fraction':r['fallback_fraction'],
+                               'sla_missed':r['sla_violated']} for r in rows],
+              }
+              Path(stem+'_eligibility.json').write_text(json.dumps(report,indent=2))
+              print(report,flush=True)
+              if comparable:
+                  # Full task CSV contains all admitted tasks; pair by actual
+                  # immutable task properties rather than by count alone.
+                  import csv
+                  from research.paired_task_analysis import compare_task_rows
+                  with open(stem+'_completed_tasks.csv',newline='') as f:
+                      paired=compare_task_rows(list(csv.DictReader(f)),
+                                              reference='queue_nsga2_no_queue')
+                  Path(stem+'_paired.json').write_text(json.dumps(paired,indent=2))
+                  print('Paired task outcomes checked:',scale)
+              else:
+                  print('CENSORED: no matched full-completion performance claim:',scale)
+          PY
+      - name: Archive full evidence including incomplete runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-contention-ablation-data
+          path: research/results/queue_stress_*
+          if-no-files-found: warn
+          retention-days: 90
