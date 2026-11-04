@@ -36,7 +36,7 @@ jobs:
           set -o pipefail
           python -m research.batch_unified_baselines \
             --steps 16 --drain-steps 112 \
-            --seed 733 --seeds 733 \
+            --seeds 733 \
             --start-month 6 --start-day 15 \
             --cpu-capacity-scale 0.05 \
             --policies queue_nsga2 queue_nsga2_carbon_guard queue_nsga2_carbon_sla_guard \
