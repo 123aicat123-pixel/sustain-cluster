@@ -101,6 +101,15 @@ jobs:
               --output "research/results/sla_safe_${name}_paired.json" \
               2>&1 | tee "research/results/sla_safe_${name}_paired.log"
           done
+      - name: Audit realized guard outcomes against queue-aware NSGA-II
+        run: |
+          set -o pipefail
+          for name in jun15 oct01; do
+            python -m research.guard_outcome_audit \
+              --input "research/results/sla_safe_${name}.json" \
+              --output "research/results/sla_safe_${name}_guard_outcome.json" \
+              2>&1 | tee "research/results/sla_safe_${name}_guard_outcome.log"
+          done
       - name: Retain raw task-level evidence and failures
         if: always()
         uses: actions/upload-artifact@v4
