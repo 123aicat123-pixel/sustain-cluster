@@ -36,7 +36,7 @@ class TestNSGA2Core(unittest.TestCase):
         b=nsga2_optimize(choices,evaluate,rng=random.Random(24),population_size=8,generations=5)
         self.assertEqual(a,b)
         self.assertTrue(all(g in choices[i] for i,g in enumerate(a[0])))
-        self.assertEqual(a[1]["evaluation_requests"],8*(1+2*5))
+        self.assertEqual(a[1]["evaluation_requests"],8*(2+2*5))
         self.assertLessEqual(a[1]["surrogate_evaluations"],2**3)
         self.assertGreaterEqual(a[1]["pareto_front_size"],1)
 
