@@ -5,6 +5,9 @@ on:
     branches: [research-baselines]
     paths:
       - ".github/workflows/research-sla-confusion.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-sla-confusion.yml"
   workflow_dispatch:
 
 permissions:
