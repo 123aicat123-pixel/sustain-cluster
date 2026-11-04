@@ -91,6 +91,29 @@ v1 versus v2 as a simulator-model sensitivity analysis, then use v2
 consistently across all policies and RL agents. Complete CI verification is
 required before claiming v2 results.
 
+## CPU capacity stress audit
+
+The baseline runner supports `--cpu-capacity-scale`, which makes a temporary
+copy of datacenter configs, scales **CPU core count only**, and keeps the same
+incoming workload, seed, and non-CPU resource settings for each policy.
+This changes the datacenter capacity and power model and is **a different
+simulation scenario**, never numerically comparable to full-capacity dollars
+or kilograms without normalization.
+
+A first stress run (seed 42, CPU scale **0.002**, 32 admission + 96 drain
+steps, Actions run 41780144061) was intentionally extreme:
+`lowest_carbon` completed 422/776 tasks with 354 outstanding (348 SLA
+violations among completed), while `sla_feasible_carbon` completed 453/776
+with 323 outstanding (373 violations among completed). Fallback-to-origin
+rates were 554/776 and 547/776 decisions, respectively.
+
+**This is NOT a valid algorithm-performance comparison**: large unresolved
+queues, differing completion cohorts, and a dominant common fallback
+make the numbers heavily censored and uninformative about true full-workload
+cost/SLA superiority. Tests now bracket less extreme CPU scales 0.005 and
+0.01 to locate an interpretable contention regime. Future experiments must
+record fallback rate, completion coverage and drain state before ranking.
+
 ## Important audit findings before comparing algorithms
 1. `utils/task_assignment_strategies.py` has multiple original strategies.
    `lowest_price`, `lowest_carbon`, and `most_available` consult
