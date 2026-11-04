@@ -22,6 +22,7 @@ METRICS = (
     "tasks_finished", "sla_met", "sla_violated",
     "pending_last", "running_last", "in_transit_last",
     "undispatched_at_horizon", "fallback_assignments",
+    "unfinished_dispatched", "unfinished_overdue_at_horizon",
 )
 
 
@@ -46,6 +47,7 @@ def summarize(results):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=32)
+    parser.add_argument("--drain-steps", type=int, default=0)
     parser.add_argument("--seeds", nargs="+", type=int, default=[1,42,2026])
     parser.add_argument(
         "--policies", nargs="+", choices=sorted(POLICIES),
@@ -65,14 +67,15 @@ def main():
     # coupling between consecutive policies.
     for seed in args.seeds:
         for policy in args.policies:
-            row = run(policy, seed, args.steps)
+            row = run(policy, seed, args.steps, drain_steps=args.drain_steps)
             results.append(row)
             print(f"completed: seed={seed} policy={policy} "
                   f"cost={row['reported_total_cost_usd']:.3f} "
                   f"carbon={row['reported_total_carbon_kg']:.3f} "
                   f"finished={row['tasks_finished']} "
                   f"still_running={row['running_last']} "
-                  f"in_transit={row['in_transit_last']}",flush=True)
+                  f"in_transit={row['in_transit_last']} "
+                  f"overdue_unfinished={row['unfinished_overdue_at_horizon']}",flush=True)
     prefix=args.output_prefix
     prefix.parent.mkdir(parents=True,exist_ok=True)
     jsonpath=Path(str(prefix)+".json")
@@ -86,7 +89,7 @@ def main():
     summary=summarize(results)
     summarypath.write_text(json.dumps(summary,indent=2,allow_nan=False),encoding="utf8")
     print("Wrote",str(jsonpath),str(csvpath),str(summarypath))
-    print("CAUTION: horizon includes unfinished tasks and the benchmark is exploratory only.")
+    print("CAUTION: any unfinished tasks, including overdue ones, are separately counted; observational cost/emissions continue during drain. Exploration only.")
 
 
 if __name__=="__main__":
