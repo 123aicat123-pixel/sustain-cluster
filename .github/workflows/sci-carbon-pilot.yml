@@ -47,7 +47,7 @@ jobs:
           python -m research_sci.summarize research_sci/results/pilot_3seeds.json
       - name: Capacity stress pilot (independent matched action set)
         run: |
-          python -m research_sci.run_pilot --steps 16 --drain-steps 64 --seeds 1 42 --capacity-scale 0.02 --policies lowest_carbon sla_carbon queue_risk_carbon queue_risk_defer --output research_sci/results/stress_002.json
+          python -m research_sci.run_pilot --steps 16 --drain-steps 64 --seeds 1 42 --audit-predictions --capacity-scale 0.02 --policies lowest_carbon sla_carbon queue_risk_carbon queue_risk_defer --output research_sci/results/stress_002.json
           python -m research_sci.summarize research_sci/results/stress_002.json --reference lowest_carbon
       - name: Upload results
         if: always()
