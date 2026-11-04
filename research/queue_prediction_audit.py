@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from statistics import mean
+from datetime import timedelta
 
 
 def audit_forecasts(finished, predictions, *, seed, policy):
@@ -29,7 +30,7 @@ def audit_forecasts(finished, predictions, *, seed, policy):
         # Both values compare the identical known task duration/deadline.
         # Predictions were computed at dispatch; SLA labels are audited
         # only after the independent simulator completes the task.
-        predicted_finish = expected + (task.finish_time - task.start_time)
+        predicted_finish = expected + timedelta(minutes=float(task.duration))
         predicted_met = predicted_finish <= task.sla_deadline
         actual_met = task.finish_time <= task.sla_deadline
         predicted_slack_min = (task.sla_deadline - predicted_finish).total_seconds()/60
