@@ -6,6 +6,7 @@ is explicitly censored; its finish_time attribute alone is not a completion.
 All errors are in minutes. Positive bias means the forecast was too early.
 """
 import math
+from datetime import timedelta
 
 
 def _mean(values):
@@ -18,7 +19,8 @@ def _p90(values):
     return sorted(values)[math.ceil(0.9 * len(values)) - 1]
 
 
-def summarize_forecasts(predictions, finished_tasks, buffer_minutes=30):
+def summarize_forecasts(predictions, finished_tasks, buffer_minutes=30,
+                        decision_buffers=None):
     """Return (metrics, rows) with complete and censored outcomes.
 
     predictions: mapping of task object -> predicted finish datetime or None,
@@ -38,6 +40,10 @@ def summarize_forecasts(predictions, finished_tasks, buffer_minutes=30):
     no_prediction = 0
     unfinished = 0
     rows = []
+    decision_evaluable = 0
+    decision_failures = 0
+    decision_safe_completed = 0
+    decision_false_safe = 0
     for index, (task, prediction) in enumerate(predictions.items()):
         completed = task in finished
         actual = getattr(task, "finish_time", None) if completed else None
@@ -45,13 +51,25 @@ def summarize_forecasts(predictions, finished_tasks, buffer_minutes=30):
         if completed and actual is None:
             raise AssertionError("Completed task has no finish_time")
         error_min = None
+        decision_margin = (
+            decision_buffers.get(task) if decision_buffers is not None else None
+        )
+        if decision_margin is not None:
+            if not math.isfinite(decision_margin) or decision_margin < 0:
+                raise ValueError("Non-finite/negative decision margin")
         predicted_safe = None
+        decision_predicted_safe = None
         actual_met = None if not completed else actual <= deadline
         if prediction is None:
             no_prediction += 1
         else:
             predicted += 1
             predicted_safe = prediction <= deadline
+            if decision_margin is not None:
+                decision_predicted_safe = (
+                    prediction + timedelta(minutes=decision_margin)
+                    <= deadline
+                )
             if completed:
                 evaluated += 1
                 error_min = (actual - prediction).total_seconds() / 60
@@ -60,6 +78,12 @@ def summarize_forecasts(predictions, finished_tasks, buffer_minutes=30):
                 errors.append(error_min)
                 abs_errors.append(abs(error_min))
                 buffer_failures += int(error_min > buffer_minutes)
+                if decision_margin is not None:
+                    decision_evaluable += 1
+                    decision_failures += int(error_min > decision_margin)
+                    if decision_predicted_safe:
+                        decision_safe_completed += 1
+                        decision_false_safe += int(not actual_met)
                 if predicted_safe:
                     safe_predictions += 1
                     false_safe += int(not actual_met)
@@ -75,6 +99,8 @@ def summarize_forecasts(predictions, finished_tasks, buffer_minutes=30):
             "predicted_met_sla": predicted_safe,
             "actual_met_sla": actual_met,
             "error_minutes": error_min,
+            "decision_margin_minutes": decision_margin,
+            "decision_predicted_safe": decision_predicted_safe,
         })
     return {
         "forecast_records": len(predictions),
@@ -96,4 +122,16 @@ def summarize_forecasts(predictions, finished_tasks, buffer_minutes=30):
             false_safe / safe_predictions if safe_predictions else None
         ),
         "forecast_risk_buffer_minutes": float(buffer_minutes),
+        "decision_margin_completed_evaluable": decision_evaluable,
+        "decision_margin_covered_completed": decision_evaluable - decision_failures,
+        "decision_margin_coverage_completed": (
+            1 - decision_failures / decision_evaluable
+            if decision_evaluable else None
+        ),
+        "decision_margin_predicted_safe_completed": decision_safe_completed,
+        "decision_margin_false_safe_completed": decision_false_safe,
+        "decision_margin_false_safe_rate_completed": (
+            decision_false_safe / decision_safe_completed
+            if decision_safe_completed else None
+        ),
     }, rows
