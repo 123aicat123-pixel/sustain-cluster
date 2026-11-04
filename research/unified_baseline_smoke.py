@@ -27,6 +27,7 @@ from research.physical_accounting import validate_datacenter_step
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
+from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -42,6 +43,9 @@ POLICIES = {
     "sla_feasible_carbon": SLAFeasibleCarbonPolicy,
     "edf_sla_carbon": SLAFeasibleCarbonPolicy,
     "nsga2_surrogate": NSGA2BatchPolicy,
+    "queue_nsga2": QueueAwareFull,
+    "queue_nsga2_no_queue": QueueAblationNoQueue,
+    "queue_nsga2_no_transfer": QueueAblationNoTransferCost,
 }
 
 
@@ -122,7 +126,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
             def admitted_only(time):
                 return [] if time >= cutoff else upstream_loader(time)
             env.cluster_manager.get_tasks_for_timestep = admitted_only
-        policy = (POLICIES[policy_name](seed=seed) if policy_name == 'nsga2_surrogate' else POLICIES[policy_name]())
+        policy = (POLICIES[policy_name](seed=seed) if issubclass(POLICIES[policy_name], NSGA2BatchPolicy) else POLICIES[policy_name]())
         policy.reset()
         summary = {
             "policy": policy_name, "routing": "shared_action_path_local_immediate_v2",
