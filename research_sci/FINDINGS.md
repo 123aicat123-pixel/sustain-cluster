@@ -240,3 +240,74 @@ This suggests the next rigorous experimental design should:
 as an effective new algorithm or proceed directly to RL on these results.
 The measurable next question is how to obtain valid *pre-decision* risk
 information with delayed completion feedback.
+
+
+## Chronological holdout milestone: frozen pre-test calibration changes decisions
+
+**Verified run:** [GitHub Actions 41806719867](https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/41806719867),
+`chronological-holdout` job SUCCESS at commit `42e304ba`. The code
+was then documented in `research_sci/README.md`, without changing the
+evaluated experiment. Raw `chronological.json` and `.csv` are workflow
+artifacts.
+
+### Protocol and leakage protection
+
+One continuous simulator clock is divided into **16 calibration-arrival
+ticks, 128 no-admission drain ticks, 16 later held-out arrival ticks and
+96 held-out drain ticks**. The calibration workload is always scheduled
+with identical `queue_risk_carbon`, using 30-minute margin, under both
+treatments. Every old calibration task MUST finish before the test window.
+The frozen margin is computed solely from 417 **observed completed**
+training residuals at that boundary, without reading any test completion.
+
+Each seed's fixed/learned treatment pair had matching training routes,
+training job admission fingerprint, test admission fingerprint and
+time boundaries. Both held-out cohorts admitted **314 tasks** and completed
+all 314, with **zero unfinished overdue tasks**. Because both treatments
+complete equal work, paired total carbon has a more meaningful
+interpretation here than in unfinished short stress tests.
+
+### Test-only results
+
+| Seed | Treatment | Frozen margin at test (min) | Test SLA misses | Test reported carbon (kg) | Decision-time forecast-error coverage on completed jobs |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 | fixed_30 | 30 | 131 / 314 | 1436.86 | 86.62% |
+| 1 | precalibrated_frozen | 225 | 130 / 314 | 1485.63 | 92.36% |
+| 42 | fixed_30 | 30 | 131 / 314 | 1638.87 | 87.58% |
+| 42 | precalibrated_frozen | 195 | 127 / 314 | 1750.20 | 94.27% |
+
+A frozen pretest buffer changed **164 out of 314** data-center choices for
+seed 1, and **180 out of 314** for seed 42. It reduced observed
+deadline misses by **1** and **4**, respectively, but increased reported
+energy/transmission carbon by approximately **3.39%** and **6.79%**.
+Thus, **offline/preceding-window calibration has a real causal effect on
+placements**, but is *not an unqualified improvement* in carbon/SLA.
+
+The test-only completed-task forecast-error coverage improves by roughly
+5.73 and 6.69 percentage points. This must not be confused with the
+actual SLA success rate: 130/314 and 127/314 still missed deadlines.
+Importantly, a very large margin can yield **no jobs classified
+"buffered-safe"**, making the false-safe rate undefined; it would be
+incorrect to call that zero risk. Always report the number of
+buffered-safe decisions alongside their false-safe count.
+
+### Interpretation
+
+This is a stronger **research infrastructure / experimental-design**
+milestone than previous within-window online results. It confirms that
+complete, leak-free temporal separation permits a learned risk parameter
+to change scheduling. However:
+- Two seeds and one chronological window cannot establish generalization.
+- The 195–225 minute margins are *empirical* and have no formal coverage
+  guarantee under selected/nonexchangeable workloads.
+- The 2% capacity scenario is synthetic and differs from default
+  SustainCluster hardware.
+- Lower violation count at considerably higher energy/carbon may be
+  economically unacceptable. Actual risk control remains poor
+  (about 40% of jobs miss deadline).
+
+**Next controlled research step:** add cost-aware risk budgets and
+non-vacuous coverage diagnostics; evaluate carbon versus actual SLA
+violation under several held-out calendar windows and capacities.
+Avoid claiming SCI algorithm novelty until an algorithm improves a
+pre-specified SLA-constrained carbon objective against these baselines.
