@@ -20,14 +20,14 @@ jobs:
           python-version: "3.10"
       - name: Run independent strategy tests
         run: |
-          python -m unittest research_sci.test_policies -v
+          python -m unittest discover -s research_sci -p 'test_*.py' -v
       - name: Syntax validation
         run: |
           python -m compileall -q research_sci/
 
   simulator-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,6 +41,10 @@ jobs:
       - name: Run matched-action full-simulator pilot
         run: |
           python -m research_sci.run_pilot --steps 8 --drain-steps 24 --seeds 42
+      - name: Run paired multi-seed exploratory experiment
+        run: |
+          python -m research_sci.run_pilot --steps 32 --drain-steps 96 --seeds 1 42 2026 --output research_sci/results/pilot_3seeds.json
+          python -m research_sci.summarize research_sci/results/pilot_3seeds.json
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
