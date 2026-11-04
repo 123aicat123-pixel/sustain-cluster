@@ -1,0 +1,44 @@
+name: Research baseline contract checks
+
+on:
+  push:
+    branches: [research-baselines]
+  pull_request:
+    paths:
+      - "research/**"
+      - "utils/task_assignment_strategies.py"
+      - "envs/task_scheduling_env.py"
+      - "simulation/cluster_manager.py"
+      - ".github/workflows/research-baselines.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install minimal selector dependencies
+        run: python -m pip install numpy
+      - name: Compile core Python modules (syntax only)
+        run: |
+          python -m compileall -q utils/task_assignment_strategies.py envs/task_scheduling_env.py simulation/cluster_manager.py
+      - name: Execute rule-based policy contract tests
+        run: |
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_*.py' -v 2>&1 | tee research/results/baseline-contract-tests.log
+      - name: Upload contract test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-baseline-contract-logs
+          path: research/results/
+          if-no-files-found: warn
