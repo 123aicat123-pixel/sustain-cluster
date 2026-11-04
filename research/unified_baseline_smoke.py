@@ -86,8 +86,6 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         raise ValueError("CPU capacity scale must be within (0,1]")
     if (start_month is None) != (start_day is None):
         raise ValueError("start_month and start_day must be specified together")
-    if start_month is not None:
-        date(2023, int(start_month), int(start_day))
     if steps < 1 or drain_steps < 0 or steps + drain_steps > 7 * 24 * 4:
         raise ValueError("steps must be positive, drain nonnegative, total <= 672")
     # Current trace loader uses module-level PRNGs. Reseed before each policy to
@@ -99,6 +97,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
     ))
     sim = config["simulation"]
     if start_month is not None:
+        date(int(sim["year"]), int(start_month), int(start_day))
         sim["month"] = int(start_month)
         sim["init_day"] = int(start_day)
     sim.update({
