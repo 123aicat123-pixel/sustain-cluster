@@ -394,3 +394,22 @@ are descriptive associations, not causation or statistical coverage.
 This module **does not tune or introduce a scheduler policy** and
 must not be used to choose bins or thresholds from final heldout
 errors and then report success on those same observations.
+
+
+### Decomposing inherently impossible deadlines
+
+The pressure audit additionally records a **necessary SLA feasibility
+condition at dispatch**: `deadline - decision_time - task_duration`.
+If this quantity is negative, the job cannot meet its SLA even with
+instantaneous execution start and zero network transfer. A nonnegative
+value is *not* an SLA guarantee because real routing, admission queues
+and resource contention add delays. This is a strict lower-bound
+diagnostic; it never reads the job's actual completion time or future
+tasks.
+
+In the pressure study the two groups are reported alongside later
+actual deadline misses. This prevents a good completion-time predictor
+from being blamed for deadline violations that were structurally
+unavoidable **at dispatch**. It does not prove whether an earlier
+dispatch decision could have saved the job, and it does not model
+network-latency lower bounds.
