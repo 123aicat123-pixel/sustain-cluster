@@ -68,7 +68,7 @@ jobs:
       - name: Run paired multi-seed adapted baselines (exploratory)
         run: |
           set -o pipefail
-          python -m research.batch_unified_baselines --steps 32 --drain-steps 32 --seeds 1 42 2026 --policies lowest_carbon lowest_price round_robin sla_feasible_carbon 2>&1 | tee research/results/unified-batch.log
+          python -m research.batch_unified_baselines --steps 32 --drain-steps 32 --seeds 1 42 2026 --policies lowest_carbon lowest_price round_robin sla_feasible_carbon edf_sla_carbon 2>&1 | tee research/results/unified-batch.log
       - name: Archive full-simulator results
         if: always()
         uses: actions/upload-artifact@v4
