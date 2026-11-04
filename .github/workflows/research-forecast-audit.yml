@@ -1,0 +1,75 @@
+name: Research queue start-time forecast calibration diagnostic
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-forecast-audit.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-forecast-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  start-forecast-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Load Alibaba workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Unit-check timestamp audit
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_queue_prediction_audit.py' -v 2>&1 | tee research/results/forecast_unit.log
+      - name: Run observed queue predictions on June 15 workload
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --seed 733 --seeds 733 \
+            --start-month 6 --start-day 15 \
+            --cpu-capacity-scale 0.05 \
+            --policies queue_nsga2 queue_nsga2_carbon_guard queue_nsga2_carbon_sla_guard \
+            --output-prefix research/results/forecast_jun15 \
+            2>&1 | tee research/results/forecast_jun15.log
+      - name: Verify forecast samples match completed tasks
+        run: |
+          python - <<'PY'
+          import csv,json
+          from pathlib import Path
+          stem='research/results/forecast_jun15'
+          results=json.load(open(stem+'.json'))
+          assert len(results)==3
+          with open(stem+'_queue_predictions.csv',newline='') as f:
+              samples=list(csv.DictReader(f))
+          assert len(samples)==sum(r['tasks_finished'] for r in results)
+          for row in results:
+              assert row['fully_drained']
+              assert row['fallback_assignments']==0
+              assert row['forecast_count']==row['tasks_finished']
+              assert row['forecast_mae_minutes'] is not None
+              print(row['policy'],'SLA misses',row['sla_violated'],
+                    'forecast MAE min',row['forecast_mae_minutes'],
+                    'forecast p95 abs min',row['forecast_p95_abs_minutes'],
+                    'forecast bias min',row['forecast_bias_minutes'],
+                    'optimistic fraction',row['forecast_overoptimistic_fraction'])
+          print('Forecast audit samples:',len(samples))
+          PY
+      - name: Preserve per-task raw forecasts and observations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-start-forecast-errors
+          path: research/results/forecast_*
+          if-no-files-found: warn
+          retention-days: 90
