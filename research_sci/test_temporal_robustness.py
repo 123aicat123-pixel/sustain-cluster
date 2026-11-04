@@ -40,6 +40,10 @@ class TemporalRobustnessTests(unittest.TestCase):
         out=window_summary(rows,"fixed_60",0)
         self.assertFalse(out["all_seeds_same_completed_work"])
         self.assertIsNone(out["mean_carbon_delta_pct"])
+        self.assertIsNone(out["paired_results"][0]["carbon_change_pct"])
+        self.assertIsNone(out["paired_results"][0]["carbon_change_kg_if_comparable"])
+        self.assertEqual(out["paired_results"][0]["reference_completed"], 20)
+        self.assertEqual(out["paired_results"][0]["chosen_completed"], 19)
 
     def test_no_missing_seed_or_treatment(self):
         with self.assertRaises(AssertionError):
