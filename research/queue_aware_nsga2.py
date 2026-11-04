@@ -137,6 +137,24 @@ def predict_starts(dc, arrivals, now, max_steps=672):
     raise RuntimeError("queue projection exhausted: choose longer horizon")
 
 
+def predict_starts_with_in_transit(dc, new_arrivals, now, pending_transit):
+    """Project starts with tasks ALREADY routed to this DC and still in transit.
+
+    `pending_transit` has (arrival_timestamp, task) tuples for this DC.
+    Existing transit items are put before newly dispatched tasks at equal
+    arrival ticks, as the simulator processes in_transit before actions.
+    This is a predictor hypothesis; no future task arrivals are used.
+    """
+    merged = [(task, max(now, arrival)) for arrival, task in pending_transit]
+    merged.extend(new_arrivals)
+    if not new_arrivals:
+        return {}
+    if len({id(t) for t, _ in merged}) != len(merged):
+        raise AssertionError("task duplicated in current action and in-transit")
+    projection = predict_starts(dc, merged, now)
+    return {task: projection[task] for task, _ in new_arrivals}
+
+
 class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
     """Fixed-budget routing with queue-model / transfer-accounting ablations."""
 
@@ -164,6 +182,9 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
         self.carbon_guard_extra_fitness_calls = 0
         self.predicted_start_by_task = {}
         self.prediction_audit_calls = 0
+
+    def _project_starts(self, dc, arrivals, now):
+        return predict_starts(dc, arrivals, now)
 
     def select_batch(self, tasks, datacenters):
         if not tasks:
@@ -260,7 +281,7 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
                 start_times = {}
                 for dc in dcs:
                     if arrivals[dc.dc_id]:
-                        start_times.update(predict_starts(dc, arrivals[dc.dc_id], now))
+                        start_times.update(self._project_starts(dc, arrivals[dc.dc_id], now))
             else:
                 start_times = {
                     task: ready for incoming in arrivals.values()
@@ -309,7 +330,7 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
                 )
             for dc in dcs:
                 if selected_arrivals[dc.dc_id]:
-                    prediction = predict_starts(
+                    prediction = self._project_starts(
                         dc, selected_arrivals[dc.dc_id], now
                     )
                     if set(prediction).intersection(self.predicted_start_by_task):
@@ -318,6 +339,34 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
             self.prediction_audit_calls += 1
         to_action = {dc.dc_id: i+1 for i, dc in enumerate(dcs)}
         return [to_action[gene] for gene in chromosome], fallback_count
+
+
+class QueueAwareWithTransit(QueueAwareNSGA2Policy):
+    """Controlled in-transit queue ablation, all other NSGA-II settings equal."""
+
+    def __init__(self, **kwargs):
+        super().__init__(queue_aware=True, transfer_accounting=True, **kwargs)
+
+    def reset(self):
+        super().reset()
+        self._pending_transit_by_dc = {}
+
+    def set_in_transit(self, in_transit_items, datacenters):
+        # Input comes from environment.in_transit_tasks at decision time,
+        # before dispatching the current task batch.
+        by_dc = {dc.dc_id: [] for dc in datacenters.values()}
+        for arrival_time, task, dc_name in in_transit_items:
+            if dc_name not in datacenters:
+                raise ValueError(f"unknown in-transit destination {dc_name}")
+            dc_id = datacenters[dc_name].dc_id
+            by_dc[dc_id].append((arrival_time, task))
+        self._pending_transit_by_dc = by_dc
+
+    def _project_starts(self, dc, arrivals, now):
+        return predict_starts_with_in_transit(
+            dc, arrivals, now,
+            self._pending_transit_by_dc.get(dc.dc_id, []),
+        )
 
 
 class QueueAwareCarbonSlaGuard(QueueAwareNSGA2Policy):
