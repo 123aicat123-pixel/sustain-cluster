@@ -36,6 +36,8 @@ def select_validation(rows):
         baseline = [grouped[(seed, "fixed_30")] for seed in seeds]
         equal_work = all(
             x["test_tasks_finished"] == b["test_tasks_finished"]
+            and x.get("test_finished_work_signature") is not None
+            and x["test_finished_work_signature"] == b.get("test_finished_work_signature")
             for x,b in zip(candidate, baseline))
         sla_ok = all(
             x["test_deadline_failures_including_overdue"]
@@ -112,10 +114,16 @@ def run_experiment(seeds, output, cal_steps=16, gap_val=128,
     selected_rows=[paired[(seed,selected)] for seed in seeds]
     equal_finished=all(
         a["test_tasks_finished"] == b["test_tasks_finished"]
+        and a.get("test_finished_work_signature") is not None
+        and a["test_finished_work_signature"] == b.get("test_finished_work_signature")
         for a,b in zip(baseline_rows,selected_rows)
     )
     test_diagnostic={
         "equal_completed_work_each_seed":equal_finished,
+        "same_completed_job_count_each_seed": all(
+            a["test_tasks_finished"] == b["test_tasks_finished"]
+            for a,b in zip(baseline_rows, selected_rows)
+        ),
         "baseline_mean_carbon_kg":sum(x["test_total_carbon_kg"] for x in baseline_rows)/len(seeds),
         "selected_mean_carbon_kg":sum(x["test_total_carbon_kg"] for x in selected_rows)/len(seeds),
         "baseline_mean_deadline_failures":sum(x["test_deadline_failures_including_overdue"] for x in baseline_rows)/len(seeds),

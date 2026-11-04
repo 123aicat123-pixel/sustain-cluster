@@ -25,6 +25,16 @@ class NestedTests(unittest.TestCase):
         selected,_=select_validation(rows)
         self.assertEqual(selected,"fixed_60")
 
+    def test_validation_rejects_equal_count_but_different_tasks(self):
+        rows=[example(seed,treatment) for seed in (1,42)
+              for treatment in TREATMENTS]
+        for record in rows:
+            if record["treatment"] == "fixed_60":
+                record["test_total_carbon_kg"] = 1
+                record["test_finished_work_signature"] = "different"
+        selected,_=select_validation(rows)
+        self.assertEqual(selected,"fixed_30")
+
     def test_audit_rejects_mismatch(self):
         base=example(1,"fixed_30")
         chosen=example(1,"fixed_60")

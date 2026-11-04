@@ -33,6 +33,7 @@ def example(seed, treatment):
         "test_admission_signature": "testadmissions",
         "test_tasks_admitted": 100,
         "test_tasks_finished": 100,
+        "test_finished_work_signature": "same_completed_tasks",
         "test_unfinished": 0,
         "test_unfinished_overdue": 0,
         "test_sla_met": 100 - misses,
@@ -89,6 +90,15 @@ class FrontierTests(unittest.TestCase):
         data[1]["test_unfinished"] = 1
         data[1]["test_sla_met"] -= 1
         data[1]["test_unfinished_overdue"] = 0
+        summary = summarize_frontier(data)
+        fixed60 = next(v for v in summary["treatments"]
+                       if v["treatment"] == "fixed_60")
+        self.assertFalse(fixed60["equal_completed_work_to_fixed_30"])
+        self.assertIsNone(fixed60["descriptive_pareto_nondominated"])
+
+    def test_equal_number_different_completed_jobs_not_comparable(self):
+        data = rows()
+        data[1]["test_finished_work_signature"] = "different_task_set"
         summary = summarize_frontier(data)
         fixed60 = next(v for v in summary["treatments"]
                        if v["treatment"] == "fixed_60")

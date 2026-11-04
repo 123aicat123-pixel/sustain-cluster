@@ -85,6 +85,8 @@ def summarize_frontier(rows):
         baseline = [groups[(seed, "fixed_30")] for seed in seed_list]
         equal_completed = all(
             a["test_tasks_finished"] == b["test_tasks_finished"]
+            and a.get("test_finished_work_signature") is not None
+            and a["test_finished_work_signature"] == b.get("test_finished_work_signature")
             for a, b in zip(rs, baseline)
         )
         count = len(rs)
