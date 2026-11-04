@@ -29,6 +29,27 @@ STEP_MINUTES = 15
 STEP = timedelta(minutes=STEP_MINUTES)
 
 
+def carbon_guard_choice(optimized, reference, evaluate, margin=0.0):
+    """Limit SURROGATE carbon against a legal reference chromosome.
+
+    This cannot guarantee real facility carbon, because its fitness model
+    omits many physical effects. This is an experimental policy gate.
+    """
+    if not math.isfinite(margin) or margin < 0:
+        raise ValueError("carbon guard margin must be nonnegative and finite")
+    optimized_score = tuple(evaluate(optimized))
+    reference_score = tuple(evaluate(reference))
+    if len(optimized_score) != 3 or len(reference_score) != 3:
+        raise ValueError("surrogate fitness must return three objectives")
+    if any(not math.isfinite(float(x)) for x in optimized_score + reference_score):
+        raise ValueError("nonfinite surrogate score")
+    baseline_carbon = float(reference_score[1])
+    limit = baseline_carbon + margin * max(abs(baseline_carbon), 1e-9)
+    if float(optimized_score[1]) > limit + 1e-12:
+        return list(reference), True
+    return list(optimized), False
+
+
 def predict_starts(dc, arrivals, now, max_steps=672):
     """Predict new-task start timestamps by simulating CURRENT FIFO queues.
 
@@ -94,11 +115,23 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
     """Fixed-budget routing with queue-model / transfer-accounting ablations."""
 
     def __init__(self, *, seed=0, population=16, generations=8,
-                 delay_fn=None, queue_aware=True, transfer_accounting=True):
+                 delay_fn=None, queue_aware=True, transfer_accounting=True,
+                 carbon_guard_margin=None):
         self.queue_aware = queue_aware
         self.transfer_accounting = transfer_accounting
+        self.carbon_guard_margin = carbon_guard_margin
+        if carbon_guard_margin is not None and (
+            not math.isfinite(carbon_guard_margin) or carbon_guard_margin < 0
+        ):
+            raise ValueError("invalid carbon guard margin")
         super().__init__(seed=seed, population=population,
                          generations=generations, delay_fn=delay_fn)
+
+    def reset(self):
+        super().reset()
+        self.carbon_guard_checks = 0
+        self.carbon_guard_interventions = 0
+        self.carbon_guard_extra_fitness_calls = 0
 
     def select_batch(self, tasks, datacenters):
         if not tasks:
@@ -216,12 +249,25 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
             generations=self.generations, rng=self.rng,
             seeds=[heuristic_seed], weights=(0.1, 0.1, 0.8)
         )
+        if self.carbon_guard_margin is not None:
+            self.carbon_guard_checks += 1
+            chromosome, intervened = carbon_guard_choice(
+                chromosome, heuristic_seed, fitness, margin=self.carbon_guard_margin
+            )
+            self.carbon_guard_extra_fitness_calls += 2
+            self.carbon_guard_interventions += int(intervened)
         self.optimizations += 1
         self.surrogate_evaluations += metrics["surrogate_evaluations"]
         self.evaluation_requests += metrics["evaluation_requests"]
         self.last_metrics = metrics
         to_action = {dc.dc_id: i+1 for i, dc in enumerate(dcs)}
         return [to_action[gene] for gene in chromosome], fallback_count
+
+
+class QueueAwareCarbonGuard(QueueAwareNSGA2Policy):
+    def __init__(self, **kwargs):
+        super().__init__(queue_aware=True, transfer_accounting=True,
+                         carbon_guard_margin=0.0, **kwargs)
 
 
 class QueueAwareFull(QueueAwareNSGA2Policy):
