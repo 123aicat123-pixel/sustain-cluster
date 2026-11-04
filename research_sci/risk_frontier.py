@@ -116,6 +116,8 @@ def summarize_frontier(rows):
                 "deadline_failures": row["test_deadline_failures_including_overdue"],
                 "safe_flag_count": row["test_decision_margin_predicted_safe_completed"],
                 "frozen_buffer": row["applied_frozen_buffer_minutes"],
+                "routing_changes_vs_fixed_30": row.get(
+                    "routing_changes_vs_fixed_30"),
             } for row in rs],
         }
         output["treatments"].append(entry)
@@ -143,8 +145,22 @@ def run_sweep(seeds, output, **kwargs):
         raise ValueError("Require unique seeds")
     rows = []
     for seed in seeds:
+        fixed_routes = None
         for treatment in TREATMENTS:
             result, routes = run_one(seed, treatment, **kwargs)
+            if fixed_routes is None:
+                fixed_routes = routes
+                differences = 0
+            else:
+                if len(routes) != len(fixed_routes) or any(
+                    x[0] != y[0] for x, y in zip(routes, fixed_routes)
+                ):
+                    raise AssertionError(
+                        "Same-seed treatments changed held-out admission ORDER"
+                    )
+                differences = sum(x[1] != y[1]
+                                  for x, y in zip(routes, fixed_routes))
+            result["routing_changes_vs_fixed_30"] = differences
             rows.append(result)
             print(json.dumps({
                 "seed": seed, "treatment": treatment,
@@ -152,6 +168,7 @@ def run_sweep(seeds, output, **kwargs):
                 "carbon_kg": result["test_total_carbon_kg"],
                 "sla_failures": result["test_deadline_failures_including_overdue"],
                 "finished": result["test_tasks_finished"],
+                "routing_changes": differences,
                 "safe_count": result["test_decision_margin_predicted_safe_completed"],
                 "true_failure_rate": result["test_deadline_failure_rate_admitted"],
             }), flush=True)
