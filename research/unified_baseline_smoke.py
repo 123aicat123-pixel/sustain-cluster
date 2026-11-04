@@ -119,12 +119,12 @@ def run(policy_name, seed, steps):
         for _ in range(steps):
             tasks = list(env.current_tasks)
             for task in tasks:
-                seen.add(id(task))
+                seen.add(task)
             acts, fallbacks = choose_actions(
                 policy, tasks, env.cluster_manager.datacenters
             )
             summary["fallback_assignments"] += fallbacks
-            dispatched.update(id(task) for task in tasks)
+            dispatched.update(tasks)
             _, _, terminated, truncated, info = env.step(acts)
             summary["steps_completed"] += 1
             pending = 0
@@ -137,7 +137,7 @@ def run(policy_name, seed, steps):
                 summary["tasks_finished"] += int(c["finished_tasks_count"])
                 summary["sla_met"] += int(c["__sla__"]["met"])
                 summary["sla_violated"] += int(c["__sla__"]["violated"])
-                finished.update(id(task) for task in c["tasks_finished_this_step_objects"])
+                finished.update(c["tasks_finished_this_step_objects"])
                 pending += int(c["pending_tasks"])
             summary["transmission_cost_usd"] += float(info["transmission_cost_total_usd"])
             # NB upstream info keys are misnamed: "total_energy_kwh" and
