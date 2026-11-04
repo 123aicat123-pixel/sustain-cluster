@@ -15,18 +15,7 @@ import statistics
 from pathlib import Path
 
 from research.unified_baseline_smoke import run, POLICIES, ROOT
-
-def union_csv_fieldnames(rows):
-    """Stable union of every field, preserving first-seen column ordering.
-
-    Baselines without forecast metrics and queue-aware policies with forecast
-    metrics must both remain exportable, independent of policy run order.
-    """
-    fields = list(dict.fromkeys(key for row in rows for key in row))
-    if not fields:
-        raise ValueError("no result rows for CSV export")
-    return fields
-
+from research.csv_export_schema import union_csv_fieldnames
 
 METRICS = (
     "reported_total_cost_usd", "reported_total_carbon_kg",
