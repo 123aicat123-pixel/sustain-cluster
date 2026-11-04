@@ -23,6 +23,7 @@ from pathlib import Path
 from research_sci.online_calibration import OnlineResidualCalibrator
 from research_sci.prediction_audit import summarize_forecasts
 from research_sci.queue_risk import QueueRiskCarbonPolicy, predict_finish
+from research_sci.state_risk_audit import snapshot_decision, audit_state_risk
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/env/sim_config.yaml"
@@ -134,7 +135,8 @@ def _create_env(seed, total_steps, capacity_scale, scratch, sim_duration_days=No
 
 def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             test_steps=16, drain_steps=96, capacity_scale=0.02,
-            alpha=0.1, min_samples=20, sim_duration_days=None):
+            alpha=0.1, min_samples=20, sim_duration_days=None,
+            audit_states=False, state_audit_dir=None):
     if treatment not in TREATMENTS:
         raise ValueError(f"Unknown treatment {treatment}")
     total_steps = calibration_steps + gap_steps + test_steps + drain_steps
@@ -178,6 +180,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             heldout_tasks = set()
             heldout_finished = set()
             heldout_predictions = {}
+            heldout_state_snapshots = {}
             heldout_decision_buffers = {}
             heldout_routes = []
             metrics = {
@@ -276,6 +279,12 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                             known_arrivals=in_transit[effective_id],
                         )
                         eta = max(now + dt, now + timedelta(seconds=delay))
+                    if phase == "heldout" and audit_states:
+                        heldout_state_snapshots[task] = snapshot_decision(
+                            task, dc, now, prediction,
+                            in_transit[effective_id],
+                            margin_minutes=frozen_margin
+                        )
                     in_transit[effective_id].append((eta, task))
                     actions.append(index_action[dc_id])
                     if phase == "calibration":
@@ -380,6 +389,26 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             if set(all_remaining) != heldout_tasks - heldout_finished:
                 raise AssertionError("Held-out task lifecycle not conserved")
 
+            if audit_states:
+                if set(heldout_state_snapshots) != heldout_tasks:
+                    raise AssertionError("State audit missing a heldout admission")
+                pressure_report, pressure_rows = audit_state_risk(
+                    heldout_state_snapshots, heldout_finished
+                )
+                metrics["test_state_risk_total"] = pressure_report["total"]
+                metrics["test_state_risk_by_pressure"] = pressure_report["by_predeclared_pressure"]
+                if state_audit_dir is not None:
+                    directory = Path(state_audit_dir)
+                    directory.mkdir(parents=True, exist_ok=True)
+                    identity = (
+                        f"{treatment}_seed{seed}_scale{capacity_scale}_"
+                        f"gap{gap_steps}_test{test_steps}"
+                    )
+                    (directory / (identity + ".jsonl")).write_text(
+                        "".join(json.dumps(row, allow_nan=False) + "\n"
+                                for row in pressure_rows),
+                        encoding="utf-8"
+                    )
             score, _ = summarize_forecasts(
                 heldout_predictions, heldout_finished, buffer_minutes=30,
                 decision_buffers=heldout_decision_buffers,
