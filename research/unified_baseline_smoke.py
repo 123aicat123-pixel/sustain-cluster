@@ -218,6 +218,19 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         )
         summary["undispatched_at_horizon"] = len(env.current_tasks)
         summary["unfinished_dispatched"] = len(dispatched - finished)
+        summary["completion_fraction"] = (
+            summary["tasks_finished"] / summary["tasks_dispatched"]
+            if summary["tasks_dispatched"] else None
+        )
+        summary["fallback_fraction"] = (
+            summary["fallback_assignments"] / summary["tasks_dispatched"]
+            if summary["tasks_dispatched"] else None
+        )
+        summary["fully_drained"] = summary["unfinished_dispatched"] == 0
+        summary["eligible_for_full_cohort_comparison"] = (
+            summary["fully_drained"]
+            and (summary["fallback_fraction"] or 0.0) <= 0.05
+        )
         summary["reported_total_cost_usd"] = (
             summary["facility_cost_usd"] + summary["transmission_cost_usd"]
         )
