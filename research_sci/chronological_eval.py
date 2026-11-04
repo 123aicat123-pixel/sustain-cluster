@@ -66,6 +66,27 @@ def _signature(items):
     return hashlib.sha256(json.dumps(items, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def finished_work_signature(tasks):
+    """Compare actual completed task identities and requirements, not counts.
+
+    Same number of completed jobs can hide different jobs / total compute.
+    Match a sorted multiset of stable task attributes, independent of
+    Python object identity or completion order.
+    """
+    records = sorted(
+        (
+            str(task.job_name),
+            task.arrival_time.isoformat(),
+            float(task.duration),
+            float(task.cores_req),
+            float(task.gpu_req),
+            float(task.mem_req),
+        )
+        for task in tasks
+    )
+    return _signature(records)
+
+
 def _create_env(seed, total_steps, capacity_scale, scratch, sim_duration_days=None):
     # Defer simulator and ML dependency imports: lightweight contract tests
     # run on GitHub Actions without installing 3rd-party packages.
@@ -304,6 +325,17 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                 raise AssertionError("No holdout policy activated")
             metrics["test_tasks_admitted"] = len(heldout_tasks)
             metrics["test_tasks_finished"] = len(heldout_finished)
+            metrics["test_finished_work_signature"] = finished_work_signature(
+                heldout_finished
+            )
+            metrics["test_completed_core_minutes"] = sum(
+                float(t.cores_req) * float(t.duration)
+                for t in heldout_finished
+            )
+            metrics["test_completed_gpu_minutes"] = sum(
+                float(t.gpu_req) * float(t.duration)
+                for t in heldout_finished
+            )
             metrics["test_unfinished"] = len(heldout_tasks - heldout_finished)
             metrics["test_unfinished_overdue"] = sum(
                 task.sla_deadline < env.current_time
