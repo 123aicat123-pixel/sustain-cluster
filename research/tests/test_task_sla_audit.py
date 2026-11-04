@@ -30,7 +30,7 @@ class TaskSLAContract(unittest.TestCase):
         self.horizon=datetime(2026,1,2,tzinfo=timezone.utc)
 
     def test_exact_deadline_counts_as_met(self):
-        s,rows=analyze_finished_tasks({task("A",5,15,15)},self.horizon)
+        s,rows=analyze_finished_tasks([task("A",5,15,15)],self.horizon)
         self.assertEqual(s["task_audit_violated"],0)
         self.assertEqual(s["task_audit_response_p95_minutes"],15)
         self.assertEqual(rows[0]["waiting_minutes"],5)
@@ -38,7 +38,7 @@ class TaskSLAContract(unittest.TestCase):
     def test_late_task_and_tail_metrics(self):
         a=task("A",10,30,25)
         b=task("B",2,12,15)
-        s,rows=analyze_finished_tasks({a,b},self.horizon)
+        s,rows=analyze_finished_tasks([a,b],self.horizon)
         self.assertEqual(s["task_audit_violated"],1)
         self.assertEqual(s["task_audit_sla_violation_rate"],0.5)
         self.assertEqual(s["task_audit_total_tardiness_minutes"],5)
@@ -47,15 +47,15 @@ class TaskSLAContract(unittest.TestCase):
 
     def test_reported_sla_mismatch_is_rejected(self):
         with self.assertRaisesRegex(AssertionError,"SLA flag"):
-            analyze_finished_tasks({task("A",0,10,5,recorded_met=True)},self.horizon)
+            analyze_finished_tasks([task("A",0,10,5,recorded_met=True)],self.horizon)
 
     def test_execution_duration_mismatch_is_rejected(self):
         with self.assertRaisesRegex(AssertionError,"duration mismatch"):
-            analyze_finished_tasks({task("A",0,10,15,duration=8)},self.horizon)
+            analyze_finished_tasks([task("A",0,10,15,duration=8)],self.horizon)
 
     def test_time_ordering_is_enforced(self):
         with self.assertRaisesRegex(AssertionError,"invalid timeline"):
-            analyze_finished_tasks({task("A",20,10,30)},self.horizon)
+            analyze_finished_tasks([task("A",20,10,30)],self.horizon)
 
     def test_empty_completion_cohort(self):
         s,rows=analyze_finished_tasks([],self.horizon)
