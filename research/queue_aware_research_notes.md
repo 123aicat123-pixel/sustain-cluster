@@ -64,6 +64,70 @@ It must not be called favorable without full drain and paired-cohort
 verification, and scale-dependent facility energy assumptions require
 separate calibration.
 
+
+## Verified capacity-stress result: queue prediction matters under contention
+
+GitHub Actions:
+https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/41791930845
+
+Conditions: unchanged incoming Alibaba task cohort, seed 42, 16 steps
+admission + 112 steps drain, with only total CPU core count scaled via
+temporary datacenter configs. Absolute costs/carbon **cannot** be compared
+across scale factors as if they were the same physical plant.
+
+### CPU capacity scale = 5% (all 417 tasks finish)
+
+| Policy | Cost USD | Carbon kg | SLA misses |
+|---|---:|---:|---:|
+| SLA-Carbon | 1275.087 | 4355.207 | 140 |
+| Original NSGA-II surrogate | 1278.668 | 4365.683 | 131 |
+| Queue-aware NSGA-II | 1233.314 | 4592.977 | 126 |
+| Queue-aware minus queue prediction | 1230.030 | 4260.029 | 167 |
+| Queue-aware minus transfer-cost proxy | 1238.403 | 4593.316 | 123 |
+
+All five policies completed 417/417 tasks, no fallback actions, matched
+task-level comparisons were evaluated against No-Queue, and the audited
+simulator lifecycle/accounting invariants held. The queue model reduced
+missed deadlines by **41 tasks (24.6%) relative to its otherwise matched
+No-Queue ablation** (167 -> 126), at a +USD 3.284 cost and +332.948 kg
+carbon cost *in this one test condition*. It also reduced misses
+versus SLA-Carbon (140 -> 126) at lower cost (USD 1275.087 -> 1233.314)
+but much higher carbon (4355.207 -> 4592.977 kg).
+
+The complete algorithm did NOT dominate the carbon-aware baselines;
+cost/carbon/SLA tradeoffs remain substantial. No hypothesis of a universally
+beneficial queue model has been validated.
+
+### CPU capacity scale = 2% (CENSORED — not a valid ranking)
+
+- SLA-Carbon: 388/417 completed, 29 unresolved.
+- Original NSGA-II: 417/417 completed, **27.6% fallback assignments**.
+- Queue-aware full: 417/417 completed, zero fallback.
+- No-Queue: 357/417 completed, 60 unresolved.
+- No-Transfer: 417/417 completed, zero fallback.
+
+The partially completed task cohorts are different: a naive comparison of
+reported cost, carbon and SLA misses would be **invalid and biased**.
+The CI explicitly labels this scenario CENSORED and skips completed-cohort
+paired ranking. This constitutes evidence that tighter capacity can stress
+system completion and routing feasibility.
+
+### Next scientific gates
+
+1. Repeat the 5% experiment with multiple seeds and **independent trace
+   dates**; evaluate the seed-paired miss-count differences and uncertainty.
+2. Isolate candidate-action-space differences between original NSGA-II
+   and the queue-aware class; all three queue-aware variants already share
+   the same candidate set and genetic budget.
+3. Validate the queue projector against task-level actual starts and
+   investigate why the full model pays higher carbon emissions under
+   contention. Record per-decision runtime and forecast error.
+4. Avoid mixing 2%-capacity censored data into a paper average; either
+   extend to full drain for all algorithms or report coverage/outstanding
+   work as a separate outcome.
+5. Do not call the algorithm original until a substantive literature novelty
+   search and independent comparison are completed.
+
 ## Current limitations and possible confounders
 
 1. Queue predictions omit future arrivals and any uncertainty, and predict
