@@ -115,6 +115,8 @@ class QueueRiskCarbonPolicy:
                            if name.startswith("queue_calibrated_") else None)
         self.margins_used = []
         self.calibration_ready_decisions = 0
+        self.dispatch_margin_by_task = {}
+        self.dispatch_prediction_by_task = {}
 
     def buffer_minutes(self):
         return (self.calibrator.margin_minutes() if self.calibrator is not None
@@ -163,6 +165,8 @@ class QueueRiskCarbonPolicy:
             estimates.append((finish, carbon, dc.dc_id, ticks))
 
         if not estimates:
+            self.dispatch_margin_by_task[task] = self.buffer_minutes()
+            self.dispatch_prediction_by_task[task] = None
             self.no_forecast += 1
             fallback = next((x.dc_id for x in centers if x.dc_id == task.origin_dc_id),
                             centers[0].dc_id)
@@ -194,4 +198,8 @@ class QueueRiskCarbonPolicy:
                         now_min > historic_low * (1 + self.wait_threshold_pct / 100)):
                     self.waits[task] = self.waits.get(task, 0) + 1
                     return 0, False
+        # Store only a genuinely committed (non-deferred) decision margin.
+        # This remains frozen after later completions update the calibrator.
+        self.dispatch_margin_by_task[task] = buffer_min
+        self.dispatch_prediction_by_task[task] = best[0]
         return best[2], False
