@@ -24,7 +24,8 @@ def scenario_risk_table(rows):
         day = str(row.get("scenario_start_day", "unspecified"))
         seed = str(row["seed"])
         policy = str(row["policy"])
-        taskkey = (month, day, seed, policy, str(row["job_name"]))
+        taskkey = (month, day, seed, policy, str(row["arrival_utc"]),
+                   str(row["job_name"]))
         if taskkey in identities:
             raise AssertionError(f"duplicate task forecast: {taskkey}")
         identities.add(taskkey)
