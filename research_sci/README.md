@@ -321,3 +321,39 @@ mean is not a significance claim, and neither an expired or vacuous safe
 set nor favorable outcomes in just one window are treated as robust risk
 control. Generalization still requires independent workloads, more time
 windows, more seeds and realistic hardware and arrival pressure.
+
+## Two-window, multi-capacity robustness stress (exploratory)
+
+The separate `capacity_sensitivity.py` run tests whether a validation
+choice transfers across **three predeclared synthetic resource capacity
+scales (2%, 5%, 10%)** and **two later time windows**. The selected risk
+buffer is chosen **once on the 2%-capacity validation cohort**, frozen,
+and never reselected or adjusted from any test result. Same seeds 1 and
+42 and fixed seven-day simulator duration are used throughout.
+
+```bash
+python -m research_sci.capacity_sensitivity --seeds 1 42 \
+  --capacity-scales 0.02 0.05 0.1 --test-start-ticks 288 448 \
+  --output research_sci/results/capacity_sensitivity.json
+```
+
+Only paired tests at the **same capacity / seed / window** are
+compared. All replays omit arrivals from earlier validation and other
+test windows; this remains a counterfactual test, not one uninterrupted
+production trajectory. Historical calibration is reobserved at each
+capacity, which changes the modeled workload pressure; the chosen
+margin itself remains locked based on the original 2% validation.
+
+**Crucial new audit:** Equal completed task **counts** are insufficient:
+the runner records SHA-256 fingerprints of finished task names,
+arrival times, durations and CPU/GPU/memory requirements, plus completed
+core-minutes and GPU-minutes. Carbon deltas are `null` unless the actual
+completed task *sets* match between paired policies. Raw emissions,
+SLA failures, admissions and completions remain available to interpret
+a throughput/carbon tradeoff.
+
+Do not compare raw facility+transmission totals **between** capacity
+scenarios as if resource configurations were physically identical.
+This 2x3x2 grid is a reproducibility stress test; it does not establish
+SCI-level significance, a formal risk guarantee, or generality to other
+workload datasets.
