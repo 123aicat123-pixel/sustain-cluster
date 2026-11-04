@@ -3,13 +3,6 @@ name: Research baseline contract checks
 on:
   push:
     branches: [research-baselines]
-  pull_request:
-    paths:
-      - "research/**"
-      - "utils/task_assignment_strategies.py"
-      - "envs/task_scheduling_env.py"
-      - "simulation/cluster_manager.py"
-      - ".github/workflows/research-baselines.yml"
   workflow_dispatch:
 
 permissions:
