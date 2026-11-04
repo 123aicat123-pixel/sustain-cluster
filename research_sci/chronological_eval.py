@@ -30,7 +30,22 @@ DC_CONFIG = ROOT / "configs/env/datacenters.yaml"
 REWARD_CONFIG = ROOT / "configs/env/reward_config.yaml"
 
 
-TREATMENTS = ("fixed_30", "precalibrated_frozen")
+TREATMENTS = ("fixed_30", "fixed_60", "fixed_120", "precalibrated_frozen")
+
+
+def frozen_buffer_for_treatment(treatment, learned_minutes):
+    """A priori fixed-margin controls plus margin learned before test begins.
+
+    This is a heuristic buffer sweep, not a certified probabilistic risk budget.
+    """
+    if treatment not in TREATMENTS:
+        raise ValueError(f"Unknown treatment {treatment}")
+    if not math.isfinite(learned_minutes) or learned_minutes < 0:
+        raise ValueError("Invalid historical risk margin")
+    if treatment == "precalibrated_frozen":
+        return float(learned_minutes)
+    return float(treatment.split("_")[1])
+
 
 
 def timeline_phase(index, calibration_steps, gap_steps, test_steps, drain_steps):
@@ -176,7 +191,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                     if len(calibrator.residuals) < min_samples:
                         raise AssertionError("Insufficient observed training residuals")
                     learned = calibrator.margin_minutes()
-                    frozen_margin = 30.0 if treatment == "fixed_30" else learned
+                    frozen_margin = frozen_buffer_for_treatment(treatment, learned)
                     metrics.update({
                         "pretest_train_completed": len(warmup_finished),
                         "pretest_train_forecast_residuals": calibrator.observed_count,
@@ -296,6 +311,26 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                 raise AssertionError("SLA counts do not conserve completed jobs")
             if not heldout_tasks:
                 raise AssertionError("Holdout window had zero workload arrivals")
+            # SLA performance denominator is ALL admitted test jobs, including
+            # unfinished, not only completed tasks. The incomplete-but-not-
+            # overdue cohort is always reported separately.
+            metrics["test_completion_rate_admitted"] = (
+                len(heldout_finished) / len(heldout_tasks)
+            )
+            metrics["test_on_time_rate_admitted"] = (
+                metrics["test_sla_met"] / len(heldout_tasks)
+            )
+            metrics["test_deadline_failures_including_overdue"] = (
+                metrics["test_sla_violated"] + metrics["test_unfinished_overdue"]
+            )
+            metrics["test_deadline_failure_rate_admitted"] = (
+                metrics["test_deadline_failures_including_overdue"]
+                / len(heldout_tasks)
+            )
+            metrics["test_carbon_per_finished_job_kg"] = (
+                metrics["test_total_carbon_kg"] / len(heldout_finished)
+                if heldout_finished else None
+            )
             all_remaining = (
                 [task for dc in by_id.values() for task in dc.pending_tasks]
                 + [task for dc in by_id.values() for task in dc.running_tasks]
@@ -310,6 +345,14 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                 decision_buffers=heldout_decision_buffers,
             )
             metrics.update({f"test_{key}": value for key, value in score.items()})
+            safe_completed = score["decision_margin_predicted_safe_completed"]
+            metrics["test_buffered_safe_completed_fraction_of_admitted"] = (
+                safe_completed / len(heldout_tasks)
+            )
+            metrics["test_buffered_safe_completed_fraction_of_completed"] = (
+                safe_completed / len(heldout_finished) if heldout_finished else None
+            )
+            metrics["test_safe_flag_is_vacuous"] = safe_completed == 0
             metrics["test_routing_signature"] = _signature(heldout_routes)
             metrics["test_admission_signature"] = _signature(
                 sorted(task.job_name for task in heldout_tasks)
