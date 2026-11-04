@@ -25,6 +25,7 @@ import yaml
 from train_SAC_agent import make_env
 from research.lifecycle_audit import audit_lifecycle
 from research.physical_accounting import validate_datacenter_step
+from research.queue_prediction_audit import audit_forecasts
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
@@ -80,7 +81,7 @@ def choose_actions(policy, tasks, datacenters):
     return actions, fallbacks
 
 
-def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_capacity_scale=1.0, start_month=None, start_day=None):
+def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_capacity_scale=1.0, start_month=None, start_day=None, prediction_records=None):
     if policy_name not in POLICIES:
         raise ValueError(f"Unknown baseline: {policy_name}")
     if not 0 < cpu_capacity_scale <= 1:
@@ -229,6 +230,19 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         assert independent_sla["task_audit_violated"] == summary["sla_violated"]
         assert independent_sla["task_audit_completed"] - independent_sla["task_audit_violated"] == summary["sla_met"]
         summary.update(independent_sla)
+        if getattr(policy, "queue_aware", False):
+            forecast_metrics, rows = audit_forecasts(
+                finished, policy.predicted_start_by_task,
+                seed=seed, policy=policy_name
+            )
+            summary.update(forecast_metrics)
+            if prediction_records is not None:
+                for record in rows:
+                    prediction_records.append({
+                        "scenario_start_month": int(sim["month"]),
+                        "scenario_start_day": int(sim["init_day"]),
+                        **record
+                    })
         if completed_records is not None:
             for row in task_rows:
                 completed_records.append({"policy": policy_name, "seed": seed, **row})
