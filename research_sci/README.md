@@ -357,3 +357,40 @@ scenarios as if resource configurations were physically identical.
 This 2x3x2 grid is a reproducibility stress test; it does not establish
 SCI-level significance, a formal risk guarantee, or generality to other
 workload datasets.
+
+
+## Observable pressure vs later forecast residuals (diagnostic only)
+
+`state_risk_audit.py` freezes a **dispatch-time snapshot** before
+`env.step` and before adding the target job to known reservations.
+Features include observed CPU/GPU/memory utilization; pending/running
+queue counts and queued core-minutes; already-in-transit and earlier
+same-batch committed work; current carbon intensity; task resource
+demand; time to SLA deadline and queue-model optimistic slack.
+Actual finish time and violation labels are **never input features**.
+
+After the independent heldout evaluation, `audit_state_risk` joins
+snapshots with actually completed outcomes and records unfinished jobs
+as **censored**, rather than imputing zero prediction error. It reports
+MAE, signed optimism, P90 error, fraction of completed forecast errors
+over 30 minutes, and observed SLA misses across *predeclared* pressure
+bins (<50%, 50–80%, >=80% CPU utilization; pending queue; known inbound
+commitments; negative, 0–60, and >=60 minute predicted SLA slack).
+
+A standalone reproducible observational stress comparison uses the
+same synthetic capacity levels and later time windows as earlier
+sensitivity work:
+
+```bash
+python -m research_sci.state_risk_study --seeds 1 42 \
+  --capacity-scales 0.02 0.1 --test-start-ticks 288 448 \
+  --output research_sci/results/state_risk_study.json
+```
+
+Per-task JSONL contains the frozen state and the *later observed*
+completion outcome; the JSON/CSV summaries make the number of
+censored, unforecasted and usable tasks explicit. Group comparisons
+are descriptive associations, not causation or statistical coverage.
+This module **does not tune or introduce a scheduler policy** and
+must not be used to choose bins or thresholds from final heldout
+errors and then report success on those same observations.
