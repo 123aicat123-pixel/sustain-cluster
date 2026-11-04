@@ -7,6 +7,9 @@ on:
     branches: [research-baselines]
     paths:
       - ".github/workflows/research-long-window.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-long-window.yml"
   workflow_dispatch:
 
 permissions:
