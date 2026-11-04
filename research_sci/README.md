@@ -35,7 +35,7 @@ Install dependencies (prefer isolated Python 3.10 environment):
 ```bash
 python -m pip install -r requirements.txt
 unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
-python -m unittest research_sci.test_policies -v
+python -m unittest discover -s research_sci -p 'test_*.py' -v
 python -m research_sci.run_pilot --steps 8 --drain-steps 24 --seeds 42
 ```
 
@@ -43,6 +43,7 @@ For exploratory paired multiple-seed checks:
 
 ```bash
 python -m research_sci.run_pilot --steps 32 --drain-steps 96 --seeds 1 42 2026 --output research_sci/results/pilot_3seeds.json
+python -m research_sci.summarize research_sci/results/pilot_3seeds.json
 ```
 
 Output JSON and CSV include complete/unfinished/overdue counts and separate
