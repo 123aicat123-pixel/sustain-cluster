@@ -15,6 +15,7 @@ import argparse
 import copy
 import json
 import random
+from datetime import date
 import tempfile
 from pathlib import Path
 
@@ -78,11 +79,15 @@ def choose_actions(policy, tasks, datacenters):
     return actions, fallbacks
 
 
-def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_capacity_scale=1.0):
+def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_capacity_scale=1.0, start_month=None, start_day=None):
     if policy_name not in POLICIES:
         raise ValueError(f"Unknown baseline: {policy_name}")
     if not 0 < cpu_capacity_scale <= 1:
         raise ValueError("CPU capacity scale must be within (0,1]")
+    if (start_month is None) != (start_day is None):
+        raise ValueError("start_month and start_day must be specified together")
+    if start_month is not None:
+        date(2023, int(start_month), int(start_day))
     if steps < 1 or drain_steps < 0 or steps + drain_steps > 7 * 24 * 4:
         raise ValueError("steps must be positive, drain nonnegative, total <= 672")
     # Current trace loader uses module-level PRNGs. Reseed before each policy to
@@ -93,6 +98,9 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         (ROOT / "configs/env/sim_config.yaml").read_text(encoding="utf8")
     ))
     sim = config["simulation"]
+    if start_month is not None:
+        sim["month"] = int(start_month)
+        sim["init_day"] = int(start_day)
     sim.update({
         "strategy": "manual_rl", "single_action_mode": False,
         "disable_defer_action": False, "shuffle_datacenters": False,
@@ -132,6 +140,8 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         summary = {
             "policy": policy_name, "routing": "shared_action_path_local_immediate_v2",
             "seed": seed, "steps_requested": steps, "steps_completed": 0,
+            "scenario_start_month": int(sim["month"]),
+            "scenario_start_day": int(sim["init_day"]),
             "cpu_capacity_scale": cpu_capacity_scale,
             "admission_steps": steps, "drain_steps": drain_steps,
             "tasks_seen": 0, "tasks_dispatched": 0,
@@ -290,13 +300,15 @@ def main():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--drain-steps", type=int, default=0)
     p.add_argument("--cpu-capacity-scale", type=float, default=1.0)
+    p.add_argument("--start-month", type=int)
+    p.add_argument("--start-day", type=int)
     p.add_argument(
         "--policies", nargs="+", choices=sorted(POLICIES), 
         default=["lowest_carbon", "lowest_price", "round_robin"]
     )
     p.add_argument("--output", type=Path, default=ROOT / "research/results/unified_baseline_smoke.json")
     args = p.parse_args()
-    out = [run(policy, args.seed, args.steps, drain_steps=args.drain_steps, cpu_capacity_scale=args.cpu_capacity_scale) for policy in args.policies]
+    out = [run(policy, args.seed, args.steps, drain_steps=args.drain_steps, cpu_capacity_scale=args.cpu_capacity_scale, start_month=args.start_month, start_day=args.start_day) for policy in args.policies]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(out, indent=2, allow_nan=False), encoding="utf8")
     print(json.dumps(out, indent=2, allow_nan=False))
