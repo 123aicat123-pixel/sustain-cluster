@@ -23,6 +23,7 @@ import yaml
 
 from train_SAC_agent import make_env
 from research.lifecycle_audit import audit_lifecycle
+from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
@@ -37,6 +38,7 @@ POLICIES = {
     "most_available": DistributeMostAvailable,
     "least_pending": DistributeLeastPending,
     "sla_feasible_carbon": SLAFeasibleCarbonPolicy,
+    "edf_sla_carbon": SLAFeasibleCarbonPolicy,
 }
 
 
@@ -68,7 +70,7 @@ def choose_actions(policy, tasks, datacenters):
     return actions, fallbacks
 
 
-def run(policy_name, seed, steps, drain_steps=0):
+def run(policy_name, seed, steps, drain_steps=0, completed_records=None):
     if policy_name not in POLICIES:
         raise ValueError(f"Unknown baseline: {policy_name}")
     if steps < 1 or drain_steps < 0 or steps + drain_steps > 7 * 24 * 4:
@@ -130,6 +132,10 @@ def run(policy_name, seed, steps, drain_steps=0):
         dispatched = set()
         finished = set()
         for _ in range(steps + drain_steps):
+            if policy_name == "edf_sla_carbon":
+                # EDF is a priority rule, not just a destination rule: modifying
+                # the task order changes arrival order in shared DC queues.
+                env.current_tasks.sort(key=lambda t: (t.sla_deadline, t.arrival_time))
             tasks = list(env.current_tasks)
             for task in tasks:
                 seen.add(task)
@@ -178,6 +184,14 @@ def run(policy_name, seed, steps, drain_steps=0):
             for task in dispatched - finished
         )
         summary["remaining_observation_tasks"] = len(env.current_tasks)
+        independent_sla, task_rows = analyze_finished_tasks(finished, env.current_time)
+        assert independent_sla["task_audit_completed"] == summary["tasks_finished"]
+        assert independent_sla["task_audit_violated"] == summary["sla_violated"]
+        assert independent_sla["task_audit_completed"] - independent_sla["task_audit_violated"] == summary["sla_met"]
+        summary.update(independent_sla)
+        if completed_records is not None:
+            for row in task_rows:
+                completed_records.append({"policy": policy_name, "seed": seed, **row})
         summary["tasks_seen"] = len(seen)
         summary["tasks_dispatched"] = len(dispatched)
         summary["in_transit_last"] = len(env.in_transit_tasks)
