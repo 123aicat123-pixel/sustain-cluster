@@ -34,7 +34,7 @@ jobs:
         run: |
           mkdir -p research/results
           set -o pipefail
-          python research/smoke_original_baselines.py --seed 42 --steps 8 2>&1 | tee research/results/full-simulator-smoke.log
+          python -m research.smoke_original_baselines --seed 42 --steps 8 2>&1 | tee research/results/full-simulator-smoke.log
       - name: Archive smoke results and logs
         if: always()
         uses: actions/upload-artifact@v4
