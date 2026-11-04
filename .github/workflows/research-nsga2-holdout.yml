@@ -1,4 +1,4 @@
-name: Research NSGA-II held-out three-seed validation
+name: Research NSGA-II fresh-seed validation
 
 on:
   push:
@@ -32,7 +32,7 @@ jobs:
           set -o pipefail
           python -m research.batch_unified_baselines \
             --steps 64 --drain-steps 128 \
-            --seeds 1 2026 31415 \
+            --seeds 27182 12345 8080 \
             --policies lowest_carbon sla_feasible_carbon nsga2_surrogate \
             --output-prefix research/results/nsga2_holdout \
             2>&1 | tee research/results/nsga2_holdout.log
@@ -49,7 +49,7 @@ jobs:
           import json
           rows=json.load(open('research/results/nsga2_holdout.json'))
           assert len(rows)==9
-          for seed in (1,2026,31415):
+          for seed in (27182,12345,8080):
               subset=[r for r in rows if r['seed']==seed]
               assert len(subset)==3
               assert len({r['tasks_dispatched'] for r in subset})==1
