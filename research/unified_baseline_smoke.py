@@ -22,6 +22,8 @@ import numpy as np
 import yaml
 
 from train_SAC_agent import make_env
+from research.lifecycle_audit import audit_lifecycle
+from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -34,6 +36,7 @@ POLICIES = {
     "round_robin": DistributeRoundRobin,
     "most_available": DistributeMostAvailable,
     "least_pending": DistributeLeastPending,
+    "sla_feasible_carbon": SLAFeasibleCarbonPolicy,
 }
 
 
@@ -65,11 +68,11 @@ def choose_actions(policy, tasks, datacenters):
     return actions, fallbacks
 
 
-def run(policy_name, seed, steps):
+def run(policy_name, seed, steps, drain_steps=0):
     if policy_name not in POLICIES:
         raise ValueError(f"Unknown baseline: {policy_name}")
-    if steps < 1 or steps > 7 * 24 * 4:
-        raise ValueError("steps must be in [1, 672] for the 7-day source scenario")
+    if steps < 1 or drain_steps < 0 or steps + drain_steps > 7 * 24 * 4:
+        raise ValueError("steps must be positive, drain nonnegative, total <= 672")
     # Current trace loader uses module-level PRNGs. Reseed before each policy to
     # avoid contamination from the preceding policy's random suffixes.
     random.seed(seed)
@@ -95,11 +98,21 @@ def run(policy_name, seed, steps):
         assert env.disable_defer_action is False
         assert env.cluster_manager.strategy == "manual_rl"
         env.reset(seed=seed)
+        # Prevent fresh admissions after a fixed horizon, without modifying
+        # upstream data loaders or reward/environment physics. Drain can then
+        # finish already-admitted tasks under a COMMON cutoff for all policies.
+        if drain_steps:
+            cutoff = env.start_time + env.time_step * steps
+            upstream_loader = env.cluster_manager.get_tasks_for_timestep
+            def admitted_only(time):
+                return [] if time >= cutoff else upstream_loader(time)
+            env.cluster_manager.get_tasks_for_timestep = admitted_only
         policy = POLICIES[policy_name]()
         policy.reset()
         summary = {
             "policy": policy_name, "routing": "shared_in_transit",
             "seed": seed, "steps_requested": steps, "steps_completed": 0,
+            "admission_steps": steps, "drain_steps": drain_steps,
             "tasks_seen": 0, "tasks_dispatched": 0,
             "tasks_started": 0, "tasks_finished": 0,
             "sla_met": 0, "sla_violated": 0,
@@ -116,10 +129,12 @@ def run(policy_name, seed, steps):
         seen = set()
         dispatched = set()
         finished = set()
-        for _ in range(steps):
+        for _ in range(steps + drain_steps):
             tasks = list(env.current_tasks)
             for task in tasks:
                 seen.add(task)
+            if hasattr(policy, "set_context"):
+                policy.set_context(env.current_time, env.cluster_manager)
             acts, fallbacks = choose_actions(
                 policy, tasks, env.cluster_manager.datacenters
             )
@@ -147,6 +162,22 @@ def run(policy_name, seed, steps):
             summary["pending_last"] = pending
             if terminated or truncated:
                 break
+        pending_tasks = [
+            task for dc in env.cluster_manager.datacenters.values()
+            for task in dc.pending_tasks
+        ]
+        running_tasks = [
+            task for dc in env.cluster_manager.datacenters.values()
+            for task in dc.running_tasks
+        ]
+        transit_tasks = [task for _, task, _ in env.in_transit_tasks]
+        audit = audit_lifecycle(dispatched, finished, pending_tasks, running_tasks, transit_tasks)
+        summary["lifecycle_conserved"] = True
+        summary["unfinished_overdue_at_horizon"] = sum(
+            task.sla_deadline < env.current_time
+            for task in dispatched - finished
+        )
+        summary["remaining_observation_tasks"] = len(env.current_tasks)
         summary["tasks_seen"] = len(seen)
         summary["tasks_dispatched"] = len(dispatched)
         summary["in_transit_last"] = len(env.in_transit_tasks)
@@ -163,11 +194,19 @@ def run(policy_name, seed, steps):
         )
         # At this stage these are accounting consistency checks, not scientific
         # proof that energy/carbon models match physical reality.
-        assert summary["steps_completed"] == steps, summary
+        assert summary["steps_completed"] == steps + drain_steps, summary
         assert summary["sla_met"] + summary["sla_violated"] == summary["tasks_finished"], summary
         assert summary["tasks_finished"] == len(finished), "duplicate completion counted"
         assert summary["tasks_finished"] <= summary["tasks_started"] <= len(dispatched), summary
-        assert summary["in_transit_last"] + summary["pending_last"] + summary["running_last"] <= len(dispatched), summary
+        assert audit["dispatched"] == summary["tasks_dispatched"], summary
+        assert audit["finished"] == summary["tasks_finished"], summary
+        assert audit["pending"] == summary["pending_last"], summary
+        assert audit["running"] == summary["running_last"], summary
+        assert audit["in_transit"] == summary["in_transit_last"], summary
+        assert summary["tasks_started"] == summary["tasks_finished"] + summary["running_last"], summary
+        assert summary["tasks_dispatched"] == summary["tasks_finished"] + summary["pending_last"] + summary["running_last"] + summary["in_transit_last"], summary
+        if drain_steps:
+            assert not env.current_tasks, "new tasks still admitted after cutoff"
         for key in (
             "facility_energy_kwh", "facility_cost_usd", "facility_carbon_kg",
             "transmission_cost_usd", "transmission_energy_kwh",
@@ -185,13 +224,14 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--steps", type=int, default=16)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--drain-steps", type=int, default=0)
     p.add_argument(
         "--policies", nargs="+", choices=sorted(POLICIES), 
         default=["lowest_carbon", "lowest_price", "round_robin"]
     )
     p.add_argument("--output", type=Path, default=ROOT / "research/results/unified_baseline_smoke.json")
     args = p.parse_args()
-    out = [run(policy, args.seed, args.steps) for policy in args.policies]
+    out = [run(policy, args.seed, args.steps, drain_steps=args.drain_steps) for policy in args.policies]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(out, indent=2, allow_nan=False), encoding="utf8")
     print(json.dumps(out, indent=2, allow_nan=False))
