@@ -6,6 +6,10 @@ reproduction or a claim that any scheduling algorithm is scientifically valid.
 ## Current scope
 - `research/tests/test_rule_based_baselines.py`: small deterministic
   selector-level tests using mocked data centers, with no workload dataset.
+- `research/tests/test_reward_signal_contracts.py`: characterizes how the
+  original cost/carbon reward components consume task proxies instead of
+  recorded simulator metrics. These tests are expected to **pass** while
+  demonstrating a measurement mismatch.
 - CI compiles three critical Python modules and runs these selector tests.
 - The upstream simulator, its datasets, configs, and original policies are
   deliberately unchanged at this stage.
@@ -20,7 +24,21 @@ reproduction or a claim that any scheduling algorithm is scientifically valid.
    Under this configuration, learned agents cannot use deferral, and a
    single decision is shared across tasks. This must be normalized before
    comparing task-level deferral policies.
-3. Lightweight contract tests do not validate execution completion, SLA
+3. The original `EnergyPriceReward` and `CarbonEmissionsReward` do not
+   read actual `cluster_info` energy/cost/emissions, network costs, or
+   SLA statistics; they use `cores_req * duration / 10000` proxies.
+   Their unit/calibration relationship to the simulator is not established.
+   Reward-based rankings cannot be presumed equivalent to rankings based
+   on actual operational outcomes.
+4. The original `train_rl_agent.py` test invokes a subprocess via
+   `os.system(...)` and does not check the exit status, allowing a false
+   positive if training fails. The original three tests passing is not
+   a scientific validation.
+5. The rule-based routing path enqueues assignments directly in the
+   destination's pending queue, while the manual RL environment explicitly
+   puts assigned tasks into `in_transit_tasks` after delay. This is a
+   suspected algorithm-comparison asymmetry requiring direct reproduction.
+6. Lightweight contract tests do not validate execution completion, SLA
    penalties, network transmission, energy, carbon, or cross-seed
    repeatability. A full simulation audit remains mandatory.
 
