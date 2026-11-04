@@ -383,3 +383,75 @@ budget? To answer, introduce train/validation/test chronological
 separation, broader load regimes, more seeds, and explicit
 prediction safe-set precision/coverage. Do not use the exploratory
 best 60-minute buffer as test-learned hyperparameter evidence.
+
+
+## Three-window nested validation: the 60-minute improvement DOES NOT generalize
+
+**Verified GitHub Actions job:** [run 41810849243](https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/41810849243),
+`nested-validation` completed SUCCESS, at commit `50ed8d01`.
+This phase introduces `nested_validation.py` and dataset-free
+`test_nested_validation.py` contract tests. The corresponding independent
+research branch preserves the original `main` and `research-baselines`.
+
+### Locked protocol
+
+- Calibration admission: 16 ticks.
+- No-admission gap: 128 ticks.
+- Validation admission: 16 ticks.
+- Further chronological separation: 128 ticks.
+- Later held-out test admission: 16 ticks; drain: 96 ticks.
+- Synthetic data center capacity: 2% of original settings, seeds **1** and **42**.
+- Candidate buffers: predeclared fixed 30/60/120 minutes and the
+  earlier-training empirical upper residual.
+- Selection uses **validation only**: for every seed, equal completed
+  work and no more observed deadline failures than fixed 30; among
+  eligible options, lowest mean validation carbon. Fallback baseline.
+- Later test replays original calibration and jumps over validation
+  admissions without adding them, retaining clock ordering but not
+  physical validation-cohort carryover. This is a **controlled
+  counterfactual**, not one fully continuous production trace.
+
+### Validation choice (selection allowed here)
+
+The four candidate variants, averaged across seeds, had:
+fixed 30: **1537.86 kg**, **131** SLA misses;
+fixed 60: **1519.96 kg**, **128** misses;
+fixed 120: **1567.90 kg**, **125.5** misses;
+train-quantile: **1617.92 kg**, **128.5** misses.
+
+All variants passed validation's per-seed SLA non-worsening and equal-work
+filter; the policy was **locked to fixed 60 minutes** before any later
+held-out test evaluations.
+
+### Independent later test (NEVER used for selection)
+
+| Seed | Buffer | Total test carbon (kg) | Real deadline misses | Completed tasks |
+| --- | --- | ---: | ---: | ---: |
+| 1 | fixed 30 (reference) | 1591.25 | 197 | 310 |
+| 1 | validation-selected fixed 60 | 1572.11 | **206** | 310 |
+| 42 | fixed 30 (reference) | 1678.21 | 201 | 310 |
+| 42 | validation-selected fixed 60 | 1750.82 | **200** | 310 |
+
+Paired two-seed means: **baseline 1634.73 kg and 199 SLA misses**;
+**validation-selected 1661.47 kg and 203 misses**. Thus, the
+validation-chosen 60-minute buffer is **~1.64% higher CO2** and
+**4 more missed deadlines per test** on the new held-out window, even
+though all treatments finished exactly 310 jobs per seed. Seed 1 saves
+~1.20% CO2 but incurs **9 more deadline misses**; seed 42 incurs
+~4.33% more CO2 while saving only **1 deadline miss**.
+
+### Research consequence
+
+**The apparent 60-minute carbon-and-SLA win from the previous
+two-window test DID NOT generalize to the later chronological holdout.**
+Do not present 60 minutes as a proven effective setting or a
+statistically significant improvement. This is an important negative
+result and supports the hypothesis of sensitivity to temporal demand,
+capacity and environmental conditions, but by itself does **not**
+prove general nonstationarity (only one later window, two seeds).
+
+Any next contribution must explicitly tackle temporal shifts and
+prediction risk without ex-post tuning on these test results. The
+proper next experiments are more independent time windows, arrival
+pressure regimes, and learning/calibration that adapts from *past-only*
+observed data, with paired SLA, finished-work and carbon accounting.
