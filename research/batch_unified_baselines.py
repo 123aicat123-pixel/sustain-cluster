@@ -21,6 +21,7 @@ METRICS = (
     "facility_energy_kwh", "tasks_seen", "tasks_started",
     "tasks_finished", "sla_met", "sla_violated",
     "pending_last", "running_last", "in_transit_last",
+    "local_dispatches", "remote_dispatches",
     "undispatched_at_horizon", "fallback_assignments",
     "unfinished_dispatched", "unfinished_overdue_at_horizon",
     "task_audit_sla_violation_rate", "task_audit_response_mean_minutes",
