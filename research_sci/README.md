@@ -250,3 +250,44 @@ The synthetic 2%-capacity stress scenario and two-seed evaluation
 remain exploratory. Neither the empirical frozen percentile nor the
 resulting descriptive frontier is a mathematically certified
 SLA-constrained optimizer.
+
+
+## Three-window nested validation and locked held-out test
+
+The `nested_validation.py` experiment extends the two-window frozen
+risk-margin study by using **validation only** for parameter selection.
+For each paired seed, four predeclared options (30, 60, 120 minutes and
+the earlier training-derived frozen margin) are evaluated on the SAME
+validation arrivals. The deterministic selection rule requires **every
+validation seed** to show equal numbers of completed jobs and no more
+actual deadline misses (including overdue unfinished jobs) than the
+30-minute baseline; it then minimizes average validation carbon. If all
+other options violate this condition, the selected treatment remains
+30 minutes.
+
+After this choice is printed and locked, the simulator is re-created
+from the same training start time and advanced to a **later held-out test
+arrival window**. Only the fixed-30 baseline and the validation-selected
+treatment are evaluated there. Holdout metrics are not read in the
+selection function. The script checks identical training route signatures
+and matched heldout arrival fingerprints, admission counts, timeline
+boundaries and frozen margins for paired treatments.
+
+Default grid: 16 training-admission steps, 128-step gap, 16
+validation-admission steps, further 128-step gap, 16 held-out test-admission
+steps, 96 heldout drain steps. The heldout replay intentionally skips
+validation arrivals during the middle time gap, so it is a controlled
+counterfactual on a later clock interval rather than a fully continuous
+production environment across train/validation/test.
+
+```bash
+python -m research_sci.nested_validation --seeds 1 42 \
+  --capacity-scale 0.02 --output research_sci/results/nested_validation.json
+```
+
+Output contains validation results, the **pretest locked selection and
+rule**, and independent test outcomes, with separate CSVs for validation
+and heldout test. This avoids the previous test-set selection issue,
+but two seeds, a single synthetic-capacity setting and a deliberately
+gapped simulation remain **exploratory** and cannot certify SCI
+significance, generalization or SLA probability bounds.
