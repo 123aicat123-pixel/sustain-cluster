@@ -357,7 +357,11 @@ def main():
     args.output.write_text(json.dumps(rows, indent=2, allow_nan=False), encoding="utf-8")
     csv_path = args.output.with_suffix(".csv")
     with csv_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        # Calibrated policies attach extra diagnostics absent from ordinary
+        # baselines. Preserve all columns instead of assuming row 0 has every
+        # policy-specific metric.
+        fieldnames = list(dict.fromkeys(key for row in rows for key in row))
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
     print(f"Raw results: {args.output} and {csv_path}")
