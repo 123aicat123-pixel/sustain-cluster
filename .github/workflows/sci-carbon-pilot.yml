@@ -49,6 +49,10 @@ jobs:
         run: |
           python -m research_sci.run_pilot --steps 16 --drain-steps 64 --seeds 1 42 --audit-predictions --capacity-scale 0.02 --policies lowest_carbon sla_carbon queue_risk_carbon queue_risk_defer queue_calibrated_carbon queue_calibrated_defer --output research_sci/results/stress_002.json
           python -m research_sci.summarize research_sci/results/stress_002.json --reference lowest_carbon
+      - name: Longer admission window calibration activity check
+        run: |
+          python -m research_sci.run_pilot --steps 32 --drain-steps 96 --seeds 1 42 --audit-predictions --capacity-scale 0.02 --policies queue_risk_carbon queue_calibrated_carbon queue_risk_defer queue_calibrated_defer --output research_sci/results/stress_long_calibration.json
+          python -m research_sci.summarize research_sci/results/stress_long_calibration.json --reference queue_risk_carbon
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
