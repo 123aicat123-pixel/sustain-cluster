@@ -174,10 +174,12 @@ class DatacenterClusterManager:
         elif self.strategy in self.strategy_map:
             assigned_dc_id = self.strategy_map[self.strategy](task, self.datacenters, logger)
             assigned_dc = next((dc for dc in self.datacenters.values() if dc.dc_id == assigned_dc_id), None)
+            if assigned_dc is None:
+                if logger:
+                    logger.warning(f"[{current_time}] Task {task.job_name} could not be assigned: no matching datacenter.")
+                return None
             task.dest_dc = assigned_dc
             task.dest_dc_id = assigned_dc.dc_id
-            if not assigned_dc:
-                logger.warning(f"[{current_time}] Warning! Task {task.job_name} could not be assigned and remains in queue.")
             return assigned_dc_id
         else:
             raise ValueError(f"Unknown strategy: {self.strategy}")
