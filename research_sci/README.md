@@ -213,3 +213,40 @@ empirical quantile. The 90% target is **not** a coverage guarantee. It is
 also a cohort-separation experiment rather than a model trained on a distinct
 calendar month; larger disjoint windows and outside-sample workload seasons
 are required before publication-level claims.
+
+
+## Frozen-buffer SLA/carbon descriptive frontier
+
+`risk_frontier.py` compares the following **predeclared** margins on the
+same chronological held-out arrivals, after an identical historical warmup
+for each seed: 30, 60, 120 minutes and a frozen empirical upper residual
+from earlier completed training jobs only.
+
+```bash
+python -m research_sci.risk_frontier --seeds 1 42 \
+  --calibration-steps 16 --gap-steps 128 --test-steps 16 \
+  --drain-steps 96 --capacity-scale 0.02 \
+  --output research_sci/results/risk_frontier.json
+```
+
+Risk is evaluated as **actual missed deadlines among all admitted test
+jobs**, plus overdue unfinished tasks, with unfinished-not-yet-overdue
+reported separately. We also report completed-only forecast-error
+coverage, the count/fraction of jobs deemed buffered-safe at dispatch
+whose actual outcomes can be evaluated, and the false-safe count. An
+empty predicted-safe group is **vacuous**; it has a null/undefined
+false-safe rate, NOT zero risk.
+
+The output comprises per-treatment JSON/CSV and a compact paired-seed
+summary with purely **descriptive** carbon-vs-missed-deadline
+non-domination flags. Pareto comparability is disabled for treatments
+with different completed task counts. This grid is chosen *before*
+seeing test results; do not select a winning margin using the same
+test set and subsequently report its test performance as out-of-sample.
+Genuine parameter optimization will require a third, separate
+validation segment ahead of a held-out test interval.
+
+The synthetic 2%-capacity stress scenario and two-seed evaluation
+remain exploratory. Neither the empirical frozen percentile nor the
+resulting descriptive frontier is a mathematically certified
+SLA-constrained optimizer.
