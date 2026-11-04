@@ -140,3 +140,33 @@ calibration on completed-only tasks under heavy censoring.
 ```bash
 python -m research_sci.run_pilot --steps 16 --drain-steps 64 --seeds 1 42 --audit-predictions --capacity-scale 0.02 --policies lowest_carbon sla_carbon queue_risk_carbon queue_risk_defer --output research_sci/results/stress_002.json
 ```
+
+## Online causal residual calibration (experimental)
+
+Two additional comparison policies are now implemented:
+
+- `queue_calibrated_carbon`: queue-aware carbon placement with a causal
+  rolling positive-residual upper quantile as its SLA risk margin.
+- `queue_calibrated_defer`: same dynamic risk margin plus history-only
+  low-carbon wait decisions when the estimated deadline slack permits it.
+
+The calibrator starts with a **30-minute fallback margin**. Only once at least
+20 *completed* jobs have produced actual-vs-first-dispatch prediction residuals
+does it use a rolling 256-completion window and the empirical upper order
+statistic for target `alpha=0.1`. Every completion update happens **after**
+the corresponding simulator step and is available only to future decisions.
+The margin used for each actual routing decision is frozen, allowing
+prequential (decision-time, no-lookahead) assessment.
+
+```bash
+python -m unittest discover -s research_sci -p 'test_*.py' -v
+python -m research_sci.run_pilot --steps 16 --drain-steps 64 --seeds 1 42 --audit-predictions --capacity-scale 0.02 --policies lowest_carbon sla_carbon queue_risk_carbon queue_risk_defer queue_calibrated_carbon queue_calibrated_defer --output research_sci/results/stress_calibrated.json
+```
+
+The output includes the completed-only **decision-time empirical margin coverage**,
+the **buffer-aware false-safe rate**, and the number of calibration-ready
+decisions. Censored and unforecasted jobs are separately reported. The
+quantile is **NOT conformal / distribution-free coverage**: online policy
+feedback, nonstationarity and censoring invalidate an unconditional guarantee.
+Its `alpha=0.1` is a heuristic **target**, not a certified 10% violation
+bound. Interpret controlled risk only after held-out chronological evaluation.
