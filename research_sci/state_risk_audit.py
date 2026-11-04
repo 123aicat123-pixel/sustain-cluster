@@ -46,6 +46,10 @@ def snapshot_decision(task, dc, now, prediction, commitments,
         for name, total, available in totals
     }
     minutes_left = (task.sla_deadline - now).total_seconds() / 60
+    # A necessary (not sufficient) SLA feasibility condition. Even
+    # instantaneous admission, zero network delay and no contention
+    # cannot meet the deadline when this quantity is negative.
+    direct_execution_slack_minutes = minutes_left - float(task.duration)
     optimistic_slack = (
         (task.sla_deadline - prediction).total_seconds() / 60
         if prediction is not None else None
@@ -83,6 +87,8 @@ def snapshot_decision(task, dc, now, prediction, commitments,
             _finite(t.duration, "pending duration") for t in pending
         ),
         "time_until_sla_minutes": minutes_left,
+        "immediate_execution_slack_minutes": direct_execution_slack_minutes,
+        "already_unachievable_if_started_now": direct_execution_slack_minutes < 0,
         "predicted_sla_slack_minutes": optimistic_slack,
         "observed_carbon_intensity": current_intensity,
         "task_duration_minutes": float(task.duration),
@@ -106,6 +112,11 @@ def state_bands(snapshot):
             "no_forecast" if slack is None else
             "negative" if slack < 0 else
             "0_to_60min" if slack < 60 else "at_least_60min"
+        ),
+        "immediate_execution_feasibility": (
+            "impossible_even_if_started_now"
+            if snapshot["already_unachievable_if_started_now"]
+            else "not_ruled_out_by_runtime_alone"
         ),
     }
 
@@ -170,7 +181,8 @@ def audit_state_risk(snapshots, finished_tasks):
         observations.append(outcome)
     strata = {}
     for feature in ("cpu_utilization","pending_queue",
-                    "committed_inbound","predicted_sla_slack"):
+                    "committed_inbound","predicted_sla_slack",
+                    "immediate_execution_feasibility"):
         groups = {}
         for record in observations:
             value = state_bands(record)[feature]
