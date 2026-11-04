@@ -9,6 +9,8 @@ def row(seed,treatment,carbon,misses,finished=20):
         "test_deadline_failures_including_overdue":misses,
         "test_tasks_finished":finished,"test_tasks_admitted":20,
         "test_unfinished":20-finished,"test_unfinished_overdue":0,
+        "test_finished_work_signature":f"tasks-{finished}",
+        "test_completed_core_minutes":finished*15.0,
     }
 
 
@@ -45,6 +47,16 @@ class TemporalRobustnessTests(unittest.TestCase):
         self.assertIsNone(out["paired_results"][0]["carbon_change_kg_if_comparable"])
         self.assertEqual(out["paired_results"][0]["reference_completed"], 20)
         self.assertEqual(out["paired_results"][0]["chosen_completed"], 19)
+
+    def test_same_count_different_tasks_block_carbon_comparison(self):
+        a=row(1,"fixed_30",100,8)
+        b=row(1,"fixed_60",90,7)
+        b["test_finished_work_signature"]="different jobs"
+        out=window_summary([a,b],"fixed_60",0)
+        self.assertFalse(out["all_seeds_same_completed_work"])
+        self.assertFalse(out["paired_results"][0]["same_completed_task_identity"])
+        self.assertTrue(out["paired_results"][0]["same_completed_count"])
+        self.assertIsNone(out["paired_results"][0]["carbon_change_pct"])
 
     def test_no_missing_seed_or_treatment(self):
         with self.assertRaises(AssertionError):
