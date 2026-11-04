@@ -9,6 +9,12 @@ on:
       - "research/unified_baseline_smoke.py"
       - "research/tests/test_nsga2.py"
       - ".github/workflows/research-nsga2.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-nsga2.yml"
+      - "research/nsga2_core.py"
+      - "research/nsga2_batch_policy.py"
+      - "research/tests/test_nsga2.py"
   workflow_dispatch:
 
 permissions:
