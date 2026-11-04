@@ -76,8 +76,11 @@ jobs:
       - name: CPU-constrained contention sensitivity smoke
         run: |
           set -o pipefail
-          python -m research.batch_unified_baselines --steps 32 --drain-steps 96 --seeds 42 --policies lowest_carbon sla_feasible_carbon --cpu-capacity-scale 0.002 --output-prefix research/results/cpu_stress_0002 2>&1 | tee research/results/cpu-stress.log
-          echo "CPU stress is an exploratory censored-horizon check; task-level pairs are only valid if both completed cohorts match."
+          for scale in 0.005 0.01; do
+            key=${scale//./}
+            python -m research.batch_unified_baselines --steps 32 --drain-steps 96 --seeds 42 --policies lowest_carbon sla_feasible_carbon --cpu-capacity-scale "$scale" --output-prefix "research/results/cpu_stress_${key}" 2>&1 | tee "research/results/cpu-stress-${key}.log"
+          done
+          echo "CPU-stress is exploratory: matched cohort comparison is invalid if completion is censored."
       - name: Archive full-simulator results
         if: always()
         uses: actions/upload-artifact@v4
