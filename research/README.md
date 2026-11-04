@@ -48,8 +48,8 @@ five comparators × three seeds completed successfully with 776 tasks per run,
 no outstanding queue/running/transfer tasks, and **49/49** research contract tests.
 
 The exported `unified_batch_completed_tasks.csv` was independently matched by
-`(seed, arrival_utc, job_name)`. Task IDs and arrival/deadline/resource
-characteristics are aligned across the matched baselines.
+`(seed, arrival_utc, job_name)`. Task IDs, arrivals, durations, deadlines, and task origins
+are aligned across the matched baselines.
 
 - Against `lowest_carbon`, `sla_feasible_carbon` rescued respectively
   16, 16, and 12 deadline misses for seeds 1, 42, and 2026, while harming
@@ -69,6 +69,27 @@ characteristics are aligned across the matched baselines.
 
 `research/paired_task_analysis.py` now automates this cohort-consistency
 check and writes a per-seed rescue/harm report to Actions artifacts.
+
+## Local routing model audit (requires new verification)
+
+In the original `TaskSchedulingEnv.step`, even a task sent back to its
+**own** data center was appended to `in_transit_tasks`, where it could
+not enter the pending queue until the following 15-minute scheduler step.
+But its network transmission energy/carbon is modeled as zero in
+`cluster_manager.py`; this timing is inconsistent with local placement.
+
+The research branch now applies a narrowly scoped **v2 local fastpath** in
+both single-action and per-task modes: local tasks enter pending immediately,
+while cross-DC tasks retain the network transfer delay. The SLA feasibility
+estimator uses 0-step local transit consistently. It does not change physical
+cooling/IT power equations.
+
+**Any earlier v1 SLA/cost/carbon numbers (including the 44 rescued tasks in
+the three original seeded scenarios) apply ONLY to the v1 transfer
+semantics. They must not be combined with or claimed for v2.** Compare
+v1 versus v2 as a simulator-model sensitivity analysis, then use v2
+consistently across all policies and RL agents. Complete CI verification is
+required before claiming v2 results.
 
 ## Important audit findings before comparing algorithms
 1. `utils/task_assignment_strategies.py` has multiple original strategies.
