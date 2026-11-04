@@ -8,6 +8,8 @@ on:
   pull_request:
     paths:
       - ".github/workflows/research-sla-confusion.yml"
+      - "research/queue_prediction_audit.py"
+      - "research/tests/test_queue_prediction_audit.py"
   workflow_dispatch:
 
 permissions:
