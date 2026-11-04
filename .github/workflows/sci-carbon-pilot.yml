@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# Re-running a full seven-job suite for every research commit wastes
+# simulator CPU and can queue multiple stale versions. Keep only the
+# newest branch-head evaluation active at any moment.
+concurrency:
+  group: sci-carbon-pilot-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   policy-contracts:
     runs-on: ubuntu-latest
