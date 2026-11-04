@@ -26,6 +26,7 @@ from research.lifecycle_audit import audit_lifecycle
 from research.physical_accounting import validate_datacenter_step
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
+from research.nsga2_batch_policy import NSGA2BatchPolicy
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -40,6 +41,7 @@ POLICIES = {
     "least_pending": DistributeLeastPending,
     "sla_feasible_carbon": SLAFeasibleCarbonPolicy,
     "edf_sla_carbon": SLAFeasibleCarbonPolicy,
+    "nsga2_surrogate": NSGA2BatchPolicy,
 }
 
 
@@ -120,7 +122,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
             def admitted_only(time):
                 return [] if time >= cutoff else upstream_loader(time)
             env.cluster_manager.get_tasks_for_timestep = admitted_only
-        policy = POLICIES[policy_name]()
+        policy = (POLICIES[policy_name](seed=seed) if policy_name == 'nsga2_surrogate' else POLICIES[policy_name]())
         policy.reset()
         summary = {
             "policy": policy_name, "routing": "shared_action_path_local_immediate_v2",
@@ -154,9 +156,12 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
                 seen.add(task)
             if hasattr(policy, "set_context"):
                 policy.set_context(env.current_time, env.cluster_manager)
-            acts, fallbacks = choose_actions(
-                policy, tasks, env.cluster_manager.datacenters
-            )
+            if hasattr(policy, "select_batch"):
+                acts, fallbacks = policy.select_batch(tasks, env.cluster_manager.datacenters)
+            else:
+                acts, fallbacks = choose_actions(
+                    policy, tasks, env.cluster_manager.datacenters
+                )
             summary["fallback_assignments"] += fallbacks
             dc_order = list(env.cluster_manager.datacenters.values())
             for task, action in zip(tasks, acts):
@@ -212,6 +217,9 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         if completed_records is not None:
             for row in task_rows:
                 completed_records.append({"policy": policy_name, "seed": seed, **row})
+        summary["nsga2_surrogate_evaluations"] = getattr(policy, "surrogate_evaluations", 0)
+        summary["nsga2_evaluation_requests"] = getattr(policy, "evaluation_requests", 0)
+        summary["nsga2_batch_optimizations"] = getattr(policy, "optimizations", 0)
         summary["tasks_seen"] = len(seen)
         summary["tasks_dispatched"] = len(dispatched)
         summary["in_transit_last"] = len(env.in_transit_tasks)
