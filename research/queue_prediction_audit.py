@@ -26,6 +26,14 @@ def audit_forecasts(finished, predictions, *, seed, policy):
         if not math.isfinite(error_minutes):
             raise AssertionError("nonfinite start residual")
         is_remote = task.dest_dc_id != task.origin_dc_id
+        # Both values compare the identical known task duration/deadline.
+        # Predictions were computed at dispatch; SLA labels are audited
+        # only after the independent simulator completes the task.
+        predicted_finish = expected + (task.finish_time - task.start_time)
+        predicted_met = predicted_finish <= task.sla_deadline
+        actual_met = task.finish_time <= task.sla_deadline
+        predicted_slack_min = (task.sla_deadline - predicted_finish).total_seconds()/60
+        actual_slack_min = (task.sla_deadline - task.finish_time).total_seconds()/60
         errors.append(abs(error_minutes))
         detailed.append({
             "seed": seed,
@@ -38,6 +46,15 @@ def audit_forecasts(finished, predictions, *, seed, policy):
             "actual_start_utc": actual.isoformat(),
             "residual_actual_minus_prediction_minutes": error_minutes,
             "abs_error_minutes": abs(error_minutes),
+            "predicted_finish_utc": predicted_finish.isoformat(),
+            "actual_finish_utc": task.finish_time.isoformat(),
+            "deadline_utc": task.sla_deadline.isoformat(),
+            "predicted_sla_met": predicted_met,
+            "actual_sla_met": actual_met,
+            "predicted_slack_minutes": predicted_slack_min,
+            "actual_slack_minutes": actual_slack_min,
+            "false_safe": predicted_met and not actual_met,
+            "false_alarm": (not predicted_met) and actual_met,
         })
     if not detailed:
         return {
@@ -47,6 +64,15 @@ def audit_forecasts(finished, predictions, *, seed, policy):
             "forecast_overoptimistic_fraction": None,
             "forecast_local_mae_minutes": None,
             "forecast_remote_mae_minutes": None,
+            "forecast_predicted_sla_misses": 0,
+            "forecast_actual_sla_misses": 0,
+            "forecast_false_safe_count": 0,
+            "forecast_false_alarm_count": 0,
+            "forecast_false_safe_fraction": None,
+            "forecast_sla_confusion_counts": {
+                "pred_met_actual_met": 0, "pred_met_actual_miss": 0,
+                "pred_miss_actual_met": 0, "pred_miss_actual_miss": 0,
+            },
         }, detailed
     sorted_abs = sorted(errors)
     remote_errors = [r["abs_error_minutes"] for r in detailed if r["is_remote"]]
@@ -61,4 +87,15 @@ def audit_forecasts(finished, predictions, *, seed, policy):
         ),
         "forecast_local_mae_minutes": mean(local_errors) if local_errors else None,
         "forecast_remote_mae_minutes": mean(remote_errors) if remote_errors else None,
+        "forecast_predicted_sla_misses": sum(not r["predicted_sla_met"] for r in detailed),
+        "forecast_actual_sla_misses": sum(not r["actual_sla_met"] for r in detailed),
+        "forecast_false_safe_count": sum(r["false_safe"] for r in detailed),
+        "forecast_false_alarm_count": sum(r["false_alarm"] for r in detailed),
+        "forecast_false_safe_fraction": mean(r["false_safe"] for r in detailed),
+        "forecast_sla_confusion_counts": {
+            "pred_met_actual_met": sum(r["predicted_sla_met"] and r["actual_sla_met"] for r in detailed),
+            "pred_met_actual_miss": sum(r["false_safe"] for r in detailed),
+            "pred_miss_actual_met": sum(r["false_alarm"] for r in detailed),
+            "pred_miss_actual_miss": sum((not r["predicted_sla_met"]) and (not r["actual_sla_met"]) for r in detailed),
+        },
     }, detailed
