@@ -21,7 +21,7 @@ import math
 from data.network_cost.network_delay import get_transmission_delay
 from research.nsga2_batch_policy import NSGA2BatchPolicy
 from research.nsga2_core import nsga2_optimize
-from research.transit_front_carbon import choose_front_carbon_under_risk
+from research.transit_front_carbon import choose_front_carbon_under_risk, choose_front_carbon_under_taskwise_finish
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from utils.transmission_region_mapper import map_location_to_region
 
@@ -272,6 +272,7 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
         # Store task-level predicted deadline misses alongside each *existing*
         # surrogate evaluation. No future simulation outcomes or added GA calls.
         predicted_miss_counts = {}
+        predicted_finishes = {}
 
         def fitness(chrom):
             cost = carbon = tardiness = 0.0
@@ -293,14 +294,17 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
                     task: ready for incoming in arrivals.values()
                     for task, ready in incoming
                 }
+            finishes = []
             for task in tasks:
                 predicted_finish = start_times[task] + timedelta(
                     minutes=float(task.duration)
                 )
+                finishes.append((predicted_finish-now).total_seconds()/60)
                 delay = (predicted_finish-task.sla_deadline).total_seconds()/60
                 tardiness += max(0.0, delay)
                 missed_deadlines += int(delay > 1e-9)
             predicted_miss_counts[tuple(chrom)] = missed_deadlines
+            predicted_finishes[tuple(chrom)] = tuple(finishes)
             return cost, carbon, tardiness
 
         chromosome, metrics = nsga2_optimize(
@@ -308,6 +312,12 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
             generations=self.generations, rng=self.rng,
             seeds=[heuristic_seed], weights=(0.1, 0.1, 0.8)
         )
+        if getattr(self, "front_carbon_taskwise_enabled", False):
+            chromosome, changed = choose_front_carbon_under_taskwise_finish(
+                chromosome, metrics["final_front_records"], predicted_finishes
+            )
+            self.front_carbon_selection_checks += 1
+            self.front_carbon_selection_changes += int(changed)
         if getattr(self, "front_carbon_risk_enabled", False):
             initial = tuple(chromosome)
             chromosome, changed = choose_front_carbon_under_risk(
@@ -505,6 +515,20 @@ class QueueAwareFrontCarbonRisk(QueueAwareWithTransit):
     """
 
     front_carbon_risk_enabled = True
+
+    def reset(self):
+        super().reset()
+        self.front_carbon_selection_checks = 0
+        self.front_carbon_selection_changes = 0
+
+
+class QueueAwareFrontCarbonTaskwise(QueueAwareWithTransit):
+    """Post-optimization low-carbon choice without worse predicted completion
+    for ANY individual task in the current batch (vs knee). A conservative
+    surrogate constraint, not a guarantee about realized SLA or carbon.
+    """
+
+    front_carbon_taskwise_enabled = True
 
     def reset(self):
         super().reset()
