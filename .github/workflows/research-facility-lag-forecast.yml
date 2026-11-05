@@ -5,6 +5,9 @@ on:
     branches: [research-baselines]
     paths:
       - "research/facility_lag_forecast.py"
+      - "research/facility_lag_phase_audit.py"
+      - "research/tests/test_facility_lag_phase_audit.py"
+      - "research/batch_unified_baselines.py"
       - "research/facility_lag_benchmark.py"
       - "research/tests/test_facility_lag_forecast.py"
       - "research/facility_lag_calibration_protocol_2026-11-05.md"
@@ -93,6 +96,7 @@ jobs:
           set -o pipefail
           mkdir -p research/results/facility_lag
           python -m unittest discover -s research/tests -p 'test_facility_lag_forecast.py' -v 2>&1 | tee research/results/facility_lag/unit_tests.log
+          python -m unittest discover -s research/tests -p 'test_facility_lag_phase_audit.py' -v 2>&1 | tee research/results/facility_lag/phase_unit_tests.log
       - uses: actions/download-artifact@v4
         with:
           pattern: frozen-facility-*
@@ -105,6 +109,14 @@ jobs:
             --directory research/results/facility_lag/collected \
             --output research/results/facility_lag/frozen_date_split_forecast.json \
             2>&1 | tee research/results/facility_lag/frozen_date_split_forecast.log
+      - name: Independently verify frozen metrics and admission-vs-drain error
+        run: |
+          set -o pipefail
+          python -m research.facility_lag_phase_audit \
+            --directory research/results/facility_lag/collected \
+            --forecast research/results/facility_lag/frozen_date_split_forecast.json \
+            --output research/results/facility_lag/frozen_phase_breakdown.json \
+            2>&1 | tee research/results/facility_lag/frozen_phase_breakdown.log
       - name: Archive coefficients, split digests, metrics and raw output
         if: always()
         uses: actions/upload-artifact@v4
