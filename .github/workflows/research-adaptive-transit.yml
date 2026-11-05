@@ -9,6 +9,7 @@ on:
       - "research/tests/test_congestion_adaptive_transit.py"
       - "research/adaptive_overhead_audit.py"
       - "research/planner_overhead_audit.py"
+      - "research/batch_metrics.py"
       - "research/tests/test_adaptive_overhead_audit.py"
       - ".github/workflows/research-adaptive-transit.yml"
   workflow_dispatch:
