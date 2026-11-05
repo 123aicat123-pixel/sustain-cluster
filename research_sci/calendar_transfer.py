@@ -109,10 +109,15 @@ def run_transfer(month,day,seeds,scales,starts,output):
                         test_steps=16,drain_steps=96,
                         capacity_scale=scale,sim_duration_days=7,
                         calendar_month=month,calendar_day=day,
-                        heldout_batch_planner=method
+                        heldout_batch_planner=method,
+                        fixed_policy_without_calibration=True
                     )
                     if row["calendar_month"]!=month or row["calendar_day"]!=day:
                         raise AssertionError("Calendar workload period not honored")
+                    if (not row["fixed_policy_without_calibration"] or
+                        row["pretest_train_completed"] != 0 or
+                        row["pretest_train_forecast_residuals"] != 0):
+                        raise AssertionError("Test contaminated by calibration admissions")
                     row["window_index"]=window["index"]
                     group.append(row)
                 for item in audit_transfer(group):
@@ -128,6 +133,7 @@ def run_transfer(month,day,seeds,scales,starts,output):
         "methods":list(METHODS),"seeds":list(seeds),"scales":list(scales),
         "windows":plan,"results":result,
         "fixed_prior_settings":{
+            "no_calibration_arrivals":True,
             "margin_minutes":30,"beam_width":4,"chunk_size":8,
             "gate_threshold":0.5,"minimum_batch_size":2,
         },
@@ -135,6 +141,12 @@ def run_transfer(month,day,seeds,scales,starts,output):
             "Threshold was hypothesized after inspecting August exploratory "
             "results; September/October are new calendar workload slices "
             "within SAME Alibaba dataset, NOT distinct workloads. "
+            "Initial September test failed strict train/test drain because "
+            "the 2%-capacity historical cohort remained congested; this "
+            "corrected protocol explicitly omits ALL calibration admissions "
+            "because each arm uses the previously fixed 30-minute buffer "
+            "and no online training, and retains the original heldout "
+            "calendar windows and fixed candidate policies. "
             "No hyperparameter selection after test and no multiple-testing "
             "adjustment. Finished task identities are compared before "
             "descriptive CO2 claims. Fixed 7-day simulator, gapped cohort "

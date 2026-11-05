@@ -7,12 +7,14 @@ def record(method):
     return {
         "batch_planner":method,"seed":1,"capacity_scale":.1,
         "calendar_month":9,"calendar_day":1,"window_index":0,
+        "fixed_policy_without_calibration":True,
+        "pretest_train_forecast_residuals":0,
         "test_window_start":"new_test","test_admissions_end":"end",
         "train_window_start":"new_train","train_admissions_end":"end_train",
         "test_tasks_admitted":10,"test_admission_signature":"same_jobs",
         "train_routing_signature":"same_training",
         "train_admission_signature":"same_prefix",
-        "pretest_train_completed":20,"pretest_learned_buffer_minutes":50.,
+        "pretest_train_completed":0,"pretest_learned_buffer_minutes":30.,
         "applied_frozen_buffer_minutes":30.,
         "queue_discipline":"fifo","forecast_queue_discipline":"fifo",
         "test_sla_met":7,"test_sla_violated":2,"test_tasks_finished":9,
@@ -55,6 +57,12 @@ class CalendarTransferTests(unittest.TestCase):
         rows[2]["test_finished_work_signature"]="different"
         results=audit_transfer(rows)
         self.assertIsNone(results[2]["carbon_change_pct_if_identical_work"])
+
+    def test_fixed_policy_is_training_free_in_all_arms(self):
+        rows=[record(t) for t in METHODS]
+        self.assertTrue(all(x["fixed_policy_without_calibration"] for x in rows))
+        self.assertEqual({x["pretest_train_completed"] for x in rows},{0})
+        self.assertEqual({x["pretest_train_forecast_residuals"] for x in rows},{0})
 
     def test_reject_existing_august_as_new_holdout(self):
         with self.assertRaises(ValueError):

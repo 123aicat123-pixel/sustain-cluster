@@ -156,7 +156,8 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             audit_candidates=False, candidate_audit_dir=None,
             heldout_queue_order="fifo", heldout_forecast_order=None,
             heldout_batch_planner="greedy",
-            calendar_month=None, calendar_day=None):
+            calendar_month=None, calendar_day=None,
+            fixed_policy_without_calibration=False):
     if treatment not in TREATMENTS:
         raise ValueError(f"Unknown treatment {treatment}")
     if heldout_queue_order not in VALID_QUEUE_ORDERS:
@@ -165,6 +166,12 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
         heldout_forecast_order = heldout_queue_order
     if heldout_forecast_order not in VALID_QUEUE_ORDERS:
         raise ValueError("Unsupported forecast queue discipline")
+    if fixed_policy_without_calibration and treatment != "fixed_30":
+        raise ValueError(
+            "No-calibration calendar transfer is permitted ONLY for the "
+            "predeclared fixed_30 policy; calibration-dependent policies "
+            "must retain their training arrivals"
+        )
     if heldout_batch_planner not in ("greedy","beam4","gate50"):
         raise ValueError("Unsupported heldout batch planner")
     if heldout_batch_planner in ("beam4","gate50") and (
@@ -192,7 +199,8 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             original_loader = env.cluster_manager.get_tasks_for_timestep
 
             def admission_gate(now):
-                if (t0 <= now < cal_end) or (test_start <= now < test_end):
+                if ((not fixed_policy_without_calibration and
+                     t0 <= now < cal_end) or (test_start <= now < test_end)):
                     return original_loader(now)
                 return []
 
@@ -222,6 +230,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             metrics = {
                 "seed": seed, "treatment": treatment,
                 "calendar_month": t0.month, "calendar_day": t0.day,
+                "fixed_policy_without_calibration": bool(fixed_policy_without_calibration),
                 "queue_discipline": heldout_queue_order,
                 "forecast_queue_discipline": heldout_forecast_order,
                 "batch_planner": heldout_batch_planner,
@@ -268,7 +277,13 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                         dc.pending_tasks or dc.running_tasks for dc in by_id.values()
                     ):
                         raise AssertionError("State not drained before holdout")
-                    if len(calibrator.residuals) < min_samples:
+                    if fixed_policy_without_calibration:
+                        if warmup_tasks or warmup_finished or calibrator.residuals:
+                            raise AssertionError(
+                                "Explicit trainless fixed-policy transfer "
+                                "unexpectedly admitted calibration jobs"
+                            )
+                    elif len(calibrator.residuals) < min_samples:
                         raise AssertionError("Insufficient observed training residuals")
                     learned = calibrator.margin_minutes()
                     frozen_margin = frozen_buffer_for_treatment(treatment, learned)

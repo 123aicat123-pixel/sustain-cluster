@@ -623,3 +623,34 @@ produce `null` comparative CO2 percentage. **Do not select or
 retune the gate threshold, beam width or carbon/SLA scalarization
 using these evaluation months** and then call them untouched tests.
 No formal safety coverage or SCI significance is implied.
+
+## November 5 transfer protocol correction: untrained fixed margin
+
+The first September cross-month CI attempt (run
+[41975832648](https://github.com/123aicat123-pixel/sustain-cluster/actions/runs/41975832648))
+**correctly refused** to run the heldout test: 14 jobs from
+the earlier 16-tick synthetic 2%-capacity calibration cohort
+were still active at heldout start, failing a hard no-leakage
+and no-carryover invariant. No September policy-comparison
+outcomes were produced by that failed episode.
+
+The three compared September/October policies do **not**
+learn from that calibration cohort: all use a 30-minute fixed
+risk buffer, a 4x8 joint planner, and the explicitly fixed 50%
+feasibility gate. To avoid contaminating the new month comparison,
+the transfer runner now explicitly sets
+`fixed_policy_without_calibration=True`: **no** arrivals are
+admitted during the earlier calendar interval, but the simulator
+clock still advances to the **same** heldout arrival times. The
+calibration count and prediction residual count are strictly asserted
+to be zero for every arm, rather than silently allowing carryover
+work. Existing August calibration/validation experiments continue
+to run and train normally.
+
+This is a *protocol correction before any completed September
+evaluation results*, not an algorithmic parameter adjustment.
+It necessarily differs from the prior August experiments in
+historical background load, so this is a NEW standalone
+training-free policy comparison, not a direct statistical contrast
+against the original August results. The fixed thresholds, dates,
+window starts, seeds, and data-center capacities are unchanged.
