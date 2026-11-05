@@ -1,0 +1,95 @@
+name: Research Pareto-front carbon risk selector falsification
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - "research/nsga2_core.py"
+      - "research/queue_aware_nsga2.py"
+      - "research/transit_front_carbon.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/tests/test_front_carbon_risk.py"
+      - ".github/workflows/research-front-carbon-risk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  carbon-risk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          - {name: jun15_05, month: 6, day: 15, scale: "0.05"}
+          - {name: nov12_05, month: 11, day: 12, scale: "0.05"}
+          - {name: may19_10, month: 5, day: 19, scale: "0.10"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install original environment dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract Alibaba task data
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Test cached Pareto front selection
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m unittest discover -s research/tests -p 'test_front_carbon_risk.py' -v 2>&1 | tee research/results/front_carbon_risk_unit.log
+      - name: Fixed-budget matched full simulator comparison
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --seeds 901 1701 \
+            --start-month ${{ matrix.case.month }} \
+            --start-day ${{ matrix.case.day }} \
+            --cpu-capacity-scale ${{ matrix.case.scale }} \
+            --policies queue_nsga2 queue_nsga2_with_transit queue_nsga2_front_carbon_risk \
+            --output-prefix "research/results/front_carbon_risk_${{ matrix.case.name }}" \
+            2>&1 | tee "research/results/front_carbon_risk_${{ matrix.case.name }}.log"
+      - name: Independently audit completed cohort and all three objectives
+        run: |
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+          path="research/results/front_carbon_risk_${{ matrix.case.name }}"
+          records=json.loads(Path(path+".json").read_text())
+          assert len(records)==6
+          for seed in (901,1701):
+              runs=[r for r in records if r["seed"]==seed]
+              assert len(runs)==3
+              assert len({r["tasks_dispatched"] for r in runs})==1
+              assert all(r["fully_drained"] and r["lifecycle_conserved"] and
+                         r["fallback_assignments"]==0 and
+                         r["tasks_finished"]==r["tasks_dispatched"] for r in runs)
+              for row in runs:
+                  assert row["forecast_count"]==row["tasks_finished"]
+              base=next(r for r in runs if r["policy"]=="queue_nsga2_with_transit")
+              trial=next(r for r in runs if r["policy"]=="queue_nsga2_front_carbon_risk")
+              assert trial["nsga2_evaluation_requests"]==base["nsga2_evaluation_requests"]
+              assert trial["nsga2_surrogate_evaluations"]==base["nsga2_surrogate_evaluations"]
+              assert trial["front_carbon_selection_checks"]==trial["nsga2_batch_optimizations"]
+              print("SEED",seed,"front swaps",trial["front_carbon_selection_changes"],
+                    "old SLA",base["sla_violated"],"new SLA",trial["sla_violated"],
+                    "carbon delta kg",trial["reported_total_carbon_kg"]-base["reported_total_carbon_kg"],
+                    "cost delta USD",trial["reported_total_cost_usd"]-base["reported_total_cost_usd"],
+                    "planner mean ms",base["planner_dispatch_mean_ms"],trial["planner_dispatch_mean_ms"])
+          with open(path+"_completed_tasks.csv",newline="") as f:
+              raw=list(csv.DictReader(f))
+          from research.paired_task_analysis import compare_task_rows
+          paired=compare_task_rows(raw,reference="queue_nsga2_with_transit")
+          assert len(paired)==4
+          Path(path+"_paired.json").write_text(json.dumps(paired,indent=2)+"\n")
+          PY
+      - name: Preserve unfavorable and successful raw results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: front-carbon-risk-${{ matrix.case.name }}
+          path: research/results/front_carbon_risk_*
+          retention-days: 90
+          if-no-files-found: warn
