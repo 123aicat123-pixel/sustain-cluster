@@ -43,12 +43,25 @@ class ProjectedRiskGuardTests(unittest.TestCase):
         self.assertEqual(response["predicted_late_beam"],0)
 
     def test_relaxed_guard_preserves_buffered_sla(self):
-        # Greedy completes 45 min from now, deadline 120 min => 75 min slack.
-        original=self.now+timedelta(minutes=45)
-        r=self.review("guard15",original+timedelta(minutes=15))
-        self.assertTrue(r["accepted"])
-        d=self.review("guard15",original+timedelta(minutes=16))
-        self.assertFalse(d["accepted"])
+        # A 15-minute loss on the first job is permitted only because
+        # a DIFFERENT job gains finish time; otherwise there is no
+        # strict projected benefit and the proposal is rejected.
+        second=IdentityTask(
+            "second",duration=15,cpu=1,
+            deadline=self.now+timedelta(hours=3)
+        )
+        first_finish=self.now+timedelta(minutes=45)
+        second_finish=self.now+timedelta(minutes=30)
+        def review(delay_minutes):
+            return self.guard("guard15").review(
+                [self.task,second],self.dcs,self.now,self.manager,self.known,
+                {"routes":[1,1],"predictions":[
+                    first_finish+timedelta(minutes=delay_minutes),
+                    second_finish-timedelta(minutes=1)
+                ]}
+            )
+        self.assertTrue(review(15)["accepted"])
+        self.assertFalse(review(16)["accepted"])
 
     def test_guard_rejects_lower_carbon_for_buffer_violation(self):
         self.task.sla_deadline=self.now+timedelta(minutes=75)
