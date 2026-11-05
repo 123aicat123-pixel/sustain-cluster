@@ -12,8 +12,10 @@ from research.queue_aware_nsga2 import (
 
 
 def task(name, cores=1, duration=30):
-    return SimpleNamespace(job_name=name, cores_req=cores, gpu_req=0,
-                           mem_req=0, duration=duration)
+    obj = type("Task", (), {})()
+    obj.job_name, obj.cores_req, obj.gpu_req = name, cores, 0
+    obj.mem_req, obj.duration = 0, duration
+    return obj
 
 
 def center(cores):
