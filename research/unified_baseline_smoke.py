@@ -29,6 +29,7 @@ from train_SAC_agent import make_env
 from research.lifecycle_audit import audit_lifecycle
 from research.physical_accounting import validate_datacenter_step
 from research.facility_telemetry import facility_cell
+from research.single_route_intervention import first_batch_probe
 from research.queue_prediction_audit import audit_forecasts
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
@@ -44,6 +45,9 @@ POLICIES = {
     "lowest_carbon": DistributeLowestCarbon,
     "lowest_price": DistributeLowestPrice,
     "round_robin": DistributeRoundRobin,
+    "probe_control": DistributeRoundRobin,
+    "probe_low_ci": DistributeRoundRobin,
+    "probe_high_ci": DistributeRoundRobin,
     "most_available": DistributeMostAvailable,
     "least_pending": DistributeLeastPending,
     "sla_feasible_carbon": SLAFeasibleCarbonPolicy,
@@ -169,6 +173,9 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         }
         # Perf-counter is observational; measure only nonempty dispatch decisions,
         # excluding environment.step(), workload loading and test audits.
+        probe_arm=policy_name.removeprefix("probe_") if policy_name.startswith("probe_") else None
+        probe_checked=False
+        probe_meta=None
         planner_dispatch_calls = 0
         planner_dispatch_seconds = 0.0
         planner_dispatch_max_seconds = 0.0
@@ -196,6 +203,13 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
                 acts, fallbacks = choose_actions(
                     policy, tasks, env.cluster_manager.datacenters
                 )
+            if probe_arm is not None and tasks and not probe_checked:
+                # Only the first nonempty dispatch batch is eligible. Every
+                # later decision executes the unmodified base round-robin.
+                probe_checked=True
+                acts,probe_meta=first_batch_probe(
+                    tasks,acts,list(env.cluster_manager.datacenters.values()),
+                    arm=probe_arm)
             if dispatch_t0 is not None:
                 decision_seconds = time.perf_counter() - dispatch_t0
                 planner_dispatch_calls += 1
@@ -205,7 +219,8 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
                 planner_dispatch_max_seconds = max(
                     planner_dispatch_max_seconds, decision_seconds
                 )
-            summary["fallback_assignments"] += fallbacks
+            summary["probe_intervention"] = probe_meta
+        summary["fallback_assignments"] += fallbacks
             dc_order = list(env.cluster_manager.datacenters.values())
             for task, action in zip(tasks, acts):
                 if dc_order[action - 1].dc_id == task.origin_dc_id:
