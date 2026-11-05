@@ -19,6 +19,8 @@ METRICS = (
     "planner_dispatch_p50_ms", "planner_dispatch_p95_ms",
     "planner_dispatch_max_ms", "planner_dispatch_ms_per_task",
     "nsga2_surrogate_evaluations", "nsga2_evaluation_requests",
+    "planner_projection_calls", "planner_projection_seconds",
+    "adaptive_gate_seconds",
 )
 
 
