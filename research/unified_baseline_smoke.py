@@ -15,6 +15,7 @@ import argparse
 import copy
 import json
 import random
+import time
 from datetime import date
 import tempfile
 from pathlib import Path
@@ -161,6 +162,11 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
             "pending_last": 0, "running_last": 0,
             "in_transit_last": 0, "undispatched_at_horizon": 0,
         }
+        # Perf-counter is observational; measure only nonempty dispatch decisions,
+        # excluding environment.step(), workload loading and test audits.
+        planner_dispatch_calls = 0
+        planner_dispatch_seconds = 0.0
+        planner_dispatch_max_seconds = 0.0
         seen = set()
         dispatched = set()
         finished = set()
@@ -176,11 +182,19 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
                 policy.set_context(env.current_time, env.cluster_manager)
             if hasattr(policy, "set_in_transit"):
                 policy.set_in_transit(env.in_transit_tasks, env.cluster_manager.datacenters)
+            dispatch_t0 = time.perf_counter() if tasks else None
             if hasattr(policy, "select_batch"):
                 acts, fallbacks = policy.select_batch(tasks, env.cluster_manager.datacenters)
             else:
                 acts, fallbacks = choose_actions(
                     policy, tasks, env.cluster_manager.datacenters
+                )
+            if dispatch_t0 is not None:
+                decision_seconds = time.perf_counter() - dispatch_t0
+                planner_dispatch_calls += 1
+                planner_dispatch_seconds += decision_seconds
+                planner_dispatch_max_seconds = max(
+                    planner_dispatch_max_seconds, decision_seconds
                 )
             summary["fallback_assignments"] += fallbacks
             dc_order = list(env.cluster_manager.datacenters.values())
@@ -250,6 +264,13 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         if completed_records is not None:
             for row in task_rows:
                 completed_records.append({"policy": policy_name, "seed": seed, **row})
+        summary["planner_dispatch_calls"] = planner_dispatch_calls
+        summary["planner_dispatch_seconds"] = planner_dispatch_seconds
+        summary["planner_dispatch_max_ms"] = planner_dispatch_max_seconds * 1000
+        summary["planner_dispatch_mean_ms"] = (
+            1000 * planner_dispatch_seconds / planner_dispatch_calls
+            if planner_dispatch_calls else None
+        )
         summary["nsga2_surrogate_evaluations"] = getattr(policy, "surrogate_evaluations", 0)
         summary["nsga2_evaluation_requests"] = getattr(policy, "evaluation_requests", 0)
         summary["nsga2_batch_optimizations"] = getattr(policy, "optimizations", 0)
