@@ -76,13 +76,21 @@ jobs:
                   print(seed,r["policy"],"sla",r["sla_violated"],
                         "carbon_kg",r["reported_total_carbon_kg"],
                         "cost_usd",r["reported_total_cost_usd"],
-                        "mae",r["forecast_mae_minutes"])
+                        "mae",r["forecast_mae_minutes"],
+                        "planning_ms_mean",r["planner_dispatch_mean_ms"],
+                        "planning_ms_max",r["planner_dispatch_max_ms"])
           with open(stem+"_completed_tasks.csv",newline="") as f:
               rows=list(csv.DictReader(f))
           from research.paired_task_analysis import compare_task_rows
           paired=compare_task_rows(rows,reference="queue_nsga2")
           assert len(paired)==4
-          Path(stem+"_paired.json").write_text(json.dumps(paired,indent=2)+"\n")
+          other=compare_task_rows(rows,reference="queue_nsga2_with_transit")
+          assert len(other)==4
+          for item in other:
+              if item["policy"]=="queue_nsga2_adaptive_transit":
+                  print("Adaptive vs full transit:",json.dumps(item,sort_keys=True))
+          Path(stem+"_paired.json").write_text(
+              json.dumps({"versus_queue":paired,"versus_transit":other},indent=2)+"\n")
           PY
       - name: Archive all simulated results, failed tests and raw tasks
         if: always()
