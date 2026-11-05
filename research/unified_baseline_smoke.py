@@ -16,6 +16,8 @@ import copy
 import json
 import random
 import time
+
+from research.planner_latency import summarize_dispatch_latency
 from datetime import date
 import tempfile
 from pathlib import Path
@@ -169,6 +171,8 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         planner_dispatch_calls = 0
         planner_dispatch_seconds = 0.0
         planner_dispatch_max_seconds = 0.0
+        planner_batch_seconds = []
+        planner_batch_sizes = []
         seen = set()
         dispatched = set()
         finished = set()
@@ -194,6 +198,8 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
             if dispatch_t0 is not None:
                 decision_seconds = time.perf_counter() - dispatch_t0
                 planner_dispatch_calls += 1
+                planner_batch_seconds.append(decision_seconds)
+                planner_batch_sizes.append(len(tasks))
                 planner_dispatch_seconds += decision_seconds
                 planner_dispatch_max_seconds = max(
                     planner_dispatch_max_seconds, decision_seconds
@@ -266,13 +272,12 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         if completed_records is not None:
             for row in task_rows:
                 completed_records.append({"policy": policy_name, "seed": seed, **row})
-        summary["planner_dispatch_calls"] = planner_dispatch_calls
-        summary["planner_dispatch_seconds"] = planner_dispatch_seconds
-        summary["planner_dispatch_max_ms"] = planner_dispatch_max_seconds * 1000
-        summary["planner_dispatch_mean_ms"] = (
-            1000 * planner_dispatch_seconds / planner_dispatch_calls
-            if planner_dispatch_calls else None
-        )
+        summary.update(summarize_dispatch_latency(
+            planner_batch_seconds, planner_batch_sizes
+        ))
+        assert summary["planner_dispatch_calls"] == planner_dispatch_calls
+        assert abs(summary["planner_dispatch_seconds"] - planner_dispatch_seconds) < 1e-8
+        assert abs(summary["planner_dispatch_max_ms"] - planner_dispatch_max_seconds * 1000) < 1e-8
         summary["nsga2_surrogate_evaluations"] = getattr(policy, "surrogate_evaluations", 0)
         summary["nsga2_evaluation_requests"] = getattr(policy, "evaluation_requests", 0)
         summary["nsga2_batch_optimizations"] = getattr(policy, "optimizations", 0)
