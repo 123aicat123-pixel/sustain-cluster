@@ -94,7 +94,7 @@ def main():
             writer.writeheader()
             writer.writerows(facility_rows)
         audit_path=Path(str(prefix)+"_facility_audit.json")
-        audit_path.write_text(json.dumps(audit,indent=2,allow_nan=False)+"\\n",
+        audit_path.write_text(json.dumps(audit,indent=2,allow_nan=False)+"\n",
                               encoding="utf8")
         print("Wrote facility telemetry",facility_path,audit_path)
     summary=summarize(results)
