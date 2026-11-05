@@ -24,6 +24,7 @@ from research_sci.online_calibration import OnlineResidualCalibrator
 from research_sci.prediction_audit import summarize_forecasts
 from research_sci.queue_risk import QueueRiskCarbonPolicy, predict_finish
 from research_sci.state_risk_audit import snapshot_decision, audit_state_risk
+from research_sci.action_feasibility_audit import evaluate_candidates, summarize_candidate_audit
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/env/sim_config.yaml"
@@ -136,7 +137,8 @@ def _create_env(seed, total_steps, capacity_scale, scratch, sim_duration_days=No
 def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             test_steps=16, drain_steps=96, capacity_scale=0.02,
             alpha=0.1, min_samples=20, sim_duration_days=None,
-            audit_states=False, state_audit_dir=None):
+            audit_states=False, state_audit_dir=None,
+            audit_candidates=False, candidate_audit_dir=None):
     if treatment not in TREATMENTS:
         raise ValueError(f"Unknown treatment {treatment}")
     total_steps = calibration_steps + gap_steps + test_steps + drain_steps
@@ -181,6 +183,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             heldout_finished = set()
             heldout_predictions = {}
             heldout_state_snapshots = {}
+            heldout_candidate_snapshots = {}
             heldout_decision_buffers = {}
             heldout_routes = []
             metrics = {
@@ -279,6 +282,17 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                             known_arrivals=in_transit[effective_id],
                         )
                         eta = max(now + dt, now + timedelta(seconds=delay))
+                    if phase == "heldout" and audit_candidates:
+                        # Must run before the selected task joins in_transit;
+                        # all alternative centers see the SAME prior batch
+                        # commitments and no future admissions/outcomes.
+                        heldout_candidate_snapshots[task] = evaluate_candidates(
+                            task, env.cluster_manager.datacenters,
+                            now, env.cluster_manager, in_transit,
+                            effective_id, step_seconds=int(dt.total_seconds()),
+                            buffer_minutes=frozen_margin,
+                            forced_origin=forced
+                        )
                     if phase == "heldout" and audit_states:
                         heldout_state_snapshots[task] = snapshot_decision(
                             task, dc, now, prediction,
@@ -389,6 +403,29 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             if set(all_remaining) != heldout_tasks - heldout_finished:
                 raise AssertionError("Held-out task lifecycle not conserved")
 
+            if audit_candidates:
+                if set(heldout_candidate_snapshots) != heldout_tasks:
+                    raise AssertionError("Candidate audit missing heldout dispatch")
+                feasibility, per_task_candidates = summarize_candidate_audit(
+                    heldout_candidate_snapshots, heldout_finished
+                )
+                if feasibility["completed"] != len(heldout_finished):
+                    raise AssertionError("Candidate audit completion mismatch")
+                if feasibility["censored_unfinished"] != len(heldout_tasks-heldout_finished):
+                    raise AssertionError("Candidate audit censoring mismatch")
+                metrics["test_action_feasibility"] = feasibility
+                if candidate_audit_dir is not None:
+                    directory = Path(candidate_audit_dir)
+                    directory.mkdir(parents=True, exist_ok=True)
+                    identity = (
+                        f"{treatment}_seed{seed}_scale{capacity_scale}_"
+                        f"gap{gap_steps}_test{test_steps}"
+                    )
+                    (directory / (identity + ".jsonl")).write_text(
+                        "".join(json.dumps(row, allow_nan=False) + "\n"
+                                for row in per_task_candidates),
+                        encoding="utf-8"
+                    )
             if audit_states:
                 if set(heldout_state_snapshots) != heldout_tasks:
                     raise AssertionError("State audit missing a heldout admission")
