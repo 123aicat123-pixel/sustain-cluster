@@ -29,7 +29,6 @@ class PlannerBatchSummaryTests(unittest.TestCase):
         self.assertEqual(report["nsga2_evaluation_requests"]["min"], 6400)
 
     def test_old_rows_without_timing_fields_are_not_silent_zeros(self):
-        _, summarize = load_real_summary()
         report = summarize([{"policy": "legacy", "sla_violated": 1}])
         self.assertIsNone(report["legacy"]["metrics"]["planner_dispatch_p95_ms"]["mean"])
 
