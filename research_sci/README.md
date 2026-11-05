@@ -493,3 +493,44 @@ The predeclared two-window, two-capacity, two-seed stress still uses a
 single Alibaba-derived workload trace and gapped counterfactual
 replays. Even a favorable result is preliminary, not statistically
 validated carbon/SLA superiority or a risk guarantee.
+
+
+## Diagnostic 2x2 queue execution versus routing forecast factorial
+
+The FIFO-vs-EDF paired experiment revealed that matched EDF+EDF can
+**increase actual SLA deadline misses**, especially at 10% synthetic
+capacity, even when task completion sets match. Because the earlier
+comparison changed both actual pending queue execution order AND the
+routing policy's queue forecast simultaneously, it cannot attribute
+the effect to either change alone.
+
+The `queue_factorial_ablation.py` script predeclares all four
+combinations:
+
+| Actual DC pending queue | Queue forecast used for routing |
+| --- | --- |
+| FIFO | FIFO (unchanged baseline) |
+| EDF | FIFO (execution-order change only relative to baseline) |
+| FIFO | EDF (prediction/routing change only relative to baseline) |
+| EDF | EDF (matched joint change) |
+
+Mismatch cases are deliberately a *diagnostic*, not recommended
+deployment configurations; accurate queue forecasting normally
+requires matching the execution rule. The 2x2 contrasts can expose
+interactions but do **not** by themselves certify independent causal
+effects in a multi-task dynamic system.
+
+```bash
+python -m research_sci.queue_factorial_ablation --seeds 1 42 \
+  --capacity-scales 0.02 0.1 --test-start-ticks 288 448 \
+  --output research_sci/results/queue_factorial.json
+```
+
+Both execution and prediction settings are installed only at heldout
+test start; all earlier training tasks and routing history use FIFO.
+All four variants share seeds, actual test arrivals, calendar time and
+capacity. The full simulator recomputes each route and future queue
+state; real SLA misses, unfinished overdue jobs, and CO2 are measured.
+Paired CO2 delta is null unless *exactly the same jobs finish*. These
+are exploratory same-trace synthetic stress results and no
+out-of-sample learning or novel EDF algorithm is claimed.
