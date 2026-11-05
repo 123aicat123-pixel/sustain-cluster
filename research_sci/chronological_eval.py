@@ -93,6 +93,17 @@ def finished_work_signature(tasks):
     return _signature(records)
 
 
+def research_calendar_climate_day(year, month, day):
+    """Calendar-correct zero-based day for seasonal environmental arrays.
+
+    Upstream make_env approximates init_day with int(month*30.5+day),
+    which places December beyond the 365-day weather array and shifts
+    November environmental features by ~1 month. Only the new-month
+    research transfer overrides this, before env.reset().
+    """
+    return (date(year,month,day)-date(year,1,1)).days
+
+
 def _create_env(seed, total_steps, capacity_scale, scratch,
                 sim_duration_days=None, calendar_month=None, calendar_day=None):
     # Defer simulator and ML dependency imports: lightweight contract tests
@@ -145,6 +156,17 @@ def _create_env(seed, total_steps, capacity_scale, scratch,
         dc_path.write_text(yaml.safe_dump(dc_config), encoding="utf-8")
     env = make_env(str(cfg_path), str(dc_path), str(REWARD_CONFIG),
                    writer=None, logger=None)
+    if calendar_month in (11,12):
+        # Preserve old August/September/October frozen-study protocol.
+        # Correct the observed upstream month*30.5+day initialization
+        # ONLY for the explicitly new November/December holdouts.
+        env.cluster_manager.init_day=research_calendar_climate_day(
+            int(sim["year"]),calendar_month,calendar_day
+        )
+        if env.cluster_manager.init_day+7+math.ceil(total_steps/96)>364:
+            raise ValueError(
+                "Environmental manager trace would exceed its year-end"
+            )
     if env.single_action_mode or env.disable_defer_action:
         raise AssertionError("Matched per-task action route is required")
     return env
