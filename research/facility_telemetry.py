@@ -108,3 +108,60 @@ def paired_carbon_attribution(rows, *, reference="queue_nsga2_with_transit",
         out.append({"seed":seed,"reference":reference,"candidate":candidate,
                     "total":dict(total),"by_datacenter":dict(sorted(parts.items()))})
     return out
+
+
+def verify_facility_telemetry(rows, aggregate_runs):
+    """Reconcile every post-step DC cell with simulator run totals.
+
+    Requiring complete rectangular (step, DC) matrices catches missing cells,
+    duplicated steps, and accidental policy/seed mixing.
+    """
+    by_run = defaultdict(list)
+    keys = set()
+    for cell in rows:
+        k = (int(cell["seed"]), str(cell["policy"]),
+             int(cell["step_index"]), str(cell["dc_name"]))
+        if k in keys:
+            raise AssertionError(f"duplicate telemetry cell {k}")
+        keys.add(k)
+        energy = float(cell["energy_kwh"])
+        carbon = float(cell["carbon_kg"])
+        cost = float(cell["cost_usd"])
+        ci = float(cell["effective_ci_g_per_kwh"])
+        price = float(cell["price_usd_per_mwh"])
+        if any(not math.isfinite(x) for x in (energy, carbon, cost, ci, price)):
+            raise AssertionError(f"invalid facility telemetry cell {k}")
+        if not math.isclose(carbon, energy * ci / 1000,
+                            rel_tol=1e-8, abs_tol=1e-7):
+            raise AssertionError(f"facility cell carbon identity failed {k}")
+        if not math.isclose(cost, energy * price / 1000,
+                            rel_tol=1e-8, abs_tol=1e-7):
+            raise AssertionError(f"facility cell cost identity failed {k}")
+        by_run[k[:2]].append(cell)
+    expected = {(int(r["seed"]), str(r["policy"])) for r in aggregate_runs}
+    if len(expected) != len(aggregate_runs) or set(by_run) != expected:
+        raise AssertionError("facility telemetry run keys do not match summary")
+    out = []
+    for run in aggregate_runs:
+        key = (int(run["seed"]), str(run["policy"]))
+        cells = by_run[key]
+        time_steps = int(run["steps_completed"])
+        dc_names = {str(c["dc_name"]) for c in cells}
+        expected_cells = {(step, dc) for step in range(time_steps)
+                          for dc in dc_names}
+        actual_cells = {(int(c["step_index"]),str(c["dc_name"])) for c in cells}
+        if expected_cells != actual_cells or not dc_names:
+            raise AssertionError(f"missing DC/step cell(s) for {key}")
+        for col, total in (
+            ("energy_kwh","facility_energy_kwh"),
+            ("carbon_kg","facility_carbon_kg"),
+            ("cost_usd","facility_cost_usd"),
+        ):
+            value = math.fsum(float(c[col]) for c in cells)
+            if not math.isclose(value,float(run[total]),
+                                rel_tol=1e-9, abs_tol=1e-6):
+                raise AssertionError(f"facility sum mismatch {key}: {col}")
+        out.append({"seed":key[0],"policy":key[1],
+                    "datacenters":len(dc_names),"steps":time_steps,
+                    "cells":len(cells),"reconciled":True})
+    return out
