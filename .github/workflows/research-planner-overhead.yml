@@ -10,6 +10,8 @@ on:
       - "research/batch_unified_baselines.py"
       - "research/tests/test_planner_latency.py"
       - "research/tests/test_planner_batch_summary.py"
+      - "research/tests/test_planner_overhead_audit.py"
+      - "research/planner_overhead_audit.py"
   workflow_dispatch:
 
 permissions:
