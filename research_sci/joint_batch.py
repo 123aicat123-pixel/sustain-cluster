@@ -45,7 +45,7 @@ class JointBatchCarbonPlanner:
         # Only predecision workload/intensity, NOT the actual facility energy.
         cpu = float(task.cores_req)/max(float(dc.total_cores),1.)
         gpu = float(task.gpu_req)/max(float(dc.total_gpus),1.)
-        mem = float(task.mem_req)/max(float(dc.total_mem_GB),1.)
+        mem = float(task.mem_req)/max(float(getattr(dc, "total_mem_GB", getattr(dc, "total_mem", 1.))),1.)
         duration = float(task.duration)
         if any(not math.isfinite(x) or x < 0 for x in (cpu,gpu,mem,duration)):
             raise ValueError("Invalid task demand or duration")
