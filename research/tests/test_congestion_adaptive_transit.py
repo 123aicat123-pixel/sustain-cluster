@@ -1,11 +1,12 @@
 """Fixed-budget capacity/relevance gate ablation contracts."""
 import unittest
+import random
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from research.queue_aware_nsga2 import (
-    relevant_transit_competition, predict_starts,
+    relevant_transit_competition, transit_may_compete_fast, predict_starts,
     predict_starts_with_in_transit, QueueAwareCongestionAdaptive,
     QueueAwareWithTransit
 )
@@ -79,6 +80,38 @@ class TestAdaptiveTransit(unittest.TestCase):
         self.assertFalse(relevant)
         full=predict_starts_with_in_transit(d,arrivals,self.now,transit)
         self.assertEqual(full,base)
+
+    def test_fast_gate_skips_noninterfering_transfer(self):
+        d=dc(cores=4)
+        new=task("new",cores=4)
+        old=task("transit",cores=4)
+        arrivals=[(new,self.now)]
+        transfer=[(self.now+timedelta(minutes=15),old)]
+        self.assertFalse(transit_may_compete_fast(d,arrivals,self.now,transfer))
+        p=QueueAwareCongestionAdaptive()
+        p._pending_transit_by_dc={1:transfer}
+        self.assertEqual(p._project_starts(d,arrivals,self.now)[new],self.now)
+        self.assertEqual(p.adaptive_transit_projections,0)
+        self.assertEqual(p.adaptive_base_projections,1)
+
+    def test_fast_gate_matches_full_projection_on_seeded_small_cases(self):
+        rng=random.Random(1901)
+        for case in range(100):
+            d=dc(cores=rng.choice([4,8,12]))
+            ready=[self.now+timedelta(minutes=15*rng.randrange(4))
+                   for _ in range(3)]
+            incoming=[(task(f"new-{case}-{j}",cores=rng.choice([1,2,4]),
+                            minutes=rng.choice([15,30,45])),ready[j])
+                      for j in range(rng.choice([1,2,3]))]
+            transfer=[(self.now+timedelta(minutes=15*rng.randrange(4)),
+                       task(f"transfer-{case}-{j}",
+                            cores=rng.choice([1,2,4]),minutes=rng.choice([15,30,45])))
+                      for j in range(rng.randrange(3))]
+            gate=transit_may_compete_fast(d,incoming,self.now,transfer)
+            base=predict_starts(d,incoming,self.now)
+            full=predict_starts_with_in_transit(d,incoming,self.now,transfer)
+            if not gate:
+                self.assertEqual(base,full,f"unsafe shortcut case {case}")
 
     def test_same_genetic_budget_and_reset_counters(self):
         base=QueueAwareWithTransit(seed=23)
