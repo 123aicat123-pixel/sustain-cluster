@@ -18,7 +18,8 @@ from research_sci.queue_risk import predict_finish
 def evaluate_candidates(task, datacenters, now, cluster_manager,
                         known_arrivals_by_dc, chosen_dc_id,
                         step_seconds=900, buffer_minutes=30.0,
-                        delay_fn=None, forced_origin=False):
+                        delay_fn=None, forced_origin=False,
+                        queue_order="fifo"):
     if not isinstance(step_seconds, int) or step_seconds <= 0:
         raise ValueError("step_seconds must be a positive integer")
     if not math.isfinite(buffer_minutes) or buffer_minutes < 0:
@@ -51,7 +52,8 @@ def evaluate_candidates(task, datacenters, now, cluster_manager,
         arrival_ticks = max(1, math.ceil(delay / step_seconds))
         forecast = predict_finish(
             task, dc, now, arrival_ticks, step_seconds=step_seconds,
-            known_arrivals=current_commitments
+            known_arrivals=current_commitments,
+            queue_order=queue_order
         )
         slack = (
             (task.sla_deadline - forecast).total_seconds() / 60

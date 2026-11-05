@@ -25,6 +25,7 @@ from research_sci.prediction_audit import summarize_forecasts
 from research_sci.queue_risk import QueueRiskCarbonPolicy, predict_finish
 from research_sci.state_risk_audit import snapshot_decision, audit_state_risk
 from research_sci.action_feasibility_audit import evaluate_candidates, summarize_candidate_audit
+from research_sci.queue_discipline import VALID_QUEUE_ORDERS, install_queue_discipline
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/env/sim_config.yaml"
@@ -138,9 +139,12 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             test_steps=16, drain_steps=96, capacity_scale=0.02,
             alpha=0.1, min_samples=20, sim_duration_days=None,
             audit_states=False, state_audit_dir=None,
-            audit_candidates=False, candidate_audit_dir=None):
+            audit_candidates=False, candidate_audit_dir=None,
+            heldout_queue_order="fifo"):
     if treatment not in TREATMENTS:
         raise ValueError(f"Unknown treatment {treatment}")
+    if heldout_queue_order not in VALID_QUEUE_ORDERS:
+        raise ValueError("Unsupported heldout queue discipline")
     total_steps = calibration_steps + gap_steps + test_steps + drain_steps
     # These must fit the chosen fixed 15-minute time grid.
     timeline_phase(total_steps-1, calibration_steps, gap_steps, test_steps, drain_steps)
@@ -187,7 +191,9 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             heldout_decision_buffers = {}
             heldout_routes = []
             metrics = {
-                "seed": seed, "treatment": treatment, "capacity_scale": capacity_scale,
+                "seed": seed, "treatment": treatment,
+                "queue_discipline": heldout_queue_order,
+                "capacity_scale": capacity_scale,
                 "calibration_steps": calibration_steps, "gap_steps": gap_steps,
                 "test_steps": test_steps, "drain_steps": drain_steps,
                 "train_window_start": t0.isoformat(),
@@ -236,8 +242,14 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                         "train_routing_signature": _signature(warmup_routes),
                     })
                     test_policy = QueueRiskCarbonPolicy(
-                        "queue_risk_carbon", risk_buffer_minutes=frozen_margin
+                        "queue_risk_carbon", risk_buffer_minutes=frozen_margin,
+                        queue_order=heldout_queue_order
                     )
+                    if heldout_queue_order != "fifo":
+                        install_queue_discipline(
+                            env.cluster_manager.datacenters,
+                            heldout_queue_order
+                        )
 
                 policy = test_policy if phase in ("heldout", "heldout_drain") else training_policy
                 in_transit = {dc_id: [] for dc_id in by_id}
@@ -280,6 +292,8 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                             task, dc, now, ticks,
                             step_seconds=int(dt.total_seconds()),
                             known_arrivals=in_transit[effective_id],
+                            queue_order=(heldout_queue_order
+                                         if phase == "heldout" else "fifo"),
                         )
                         eta = max(now + dt, now + timedelta(seconds=delay))
                     if phase == "heldout" and audit_candidates:
@@ -291,7 +305,8 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                             now, env.cluster_manager, in_transit,
                             effective_id, step_seconds=int(dt.total_seconds()),
                             buffer_minutes=frozen_margin,
-                            forced_origin=forced
+                            forced_origin=forced,
+                            queue_order=heldout_queue_order
                         )
                     if phase == "heldout" and audit_states:
                         heldout_state_snapshots[task] = snapshot_decision(

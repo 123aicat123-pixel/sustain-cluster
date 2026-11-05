@@ -11,13 +11,15 @@ import math
 
 from research_sci.policies import SpatialPolicy
 from research_sci.online_calibration import OnlineResidualCalibrator
+from research_sci.queue_discipline import priority_key, VALID_QUEUE_ORDERS
 
 
 _RESOURCE_KEYS = ("cores_req", "gpu_req", "mem_req")
 _AVAILABLE_KEYS = ("available_cores", "available_gpus", "available_mem")
 
 
-def predict_finish(task, dc, now, arrival_ticks, step_seconds=900, max_ticks=192, known_arrivals=()):
+def predict_finish(task, dc, now, arrival_ticks, step_seconds=900, max_ticks=192,
+                   known_arrivals=(), queue_order="fifo"):
     """Predict completion from observed FIFO queue and running allocations.
 
     Returns None if target cannot be scheduled within max_ticks. The discrete
@@ -26,6 +28,8 @@ def predict_finish(task, dc, now, arrival_ticks, step_seconds=900, max_ticks=192
     """
     if step_seconds <= 0 or arrival_ticks < 1 or max_ticks < arrival_ticks:
         raise ValueError("Invalid forecasting horizon")
+    if queue_order not in VALID_QUEUE_ORDERS:
+        raise ValueError("Unsupported queue order")
     available = [float(getattr(dc, key)) for key in _AVAILABLE_KEYS]
     for value in available:
         if not math.isfinite(value) or value < -1e-6:
@@ -63,6 +67,10 @@ def predict_finish(task, dc, now, arrival_ticks, step_seconds=900, max_ticks=192
             arrival_index += 1
         if tick == arrival_ticks:
             waiting.append(task)
+        # Exactly mirror the opt-in datacenter EDF execution order.
+        # FIFO remains byte-for-byte unchanged when queue_order='fifo'.
+        if queue_order == "edf":
+            waiting = deque(sorted(waiting, key=priority_key))
         queue_size = len(waiting)
         for _ in range(queue_size):
             candidate = waiting.popleft()
@@ -94,12 +102,16 @@ class QueueRiskCarbonPolicy:
              "queue_calibrated_carbon", "queue_calibrated_defer")
 
     def __init__(self, name, delay_fn=None, risk_buffer_minutes=30,
-                 wait_threshold_pct=5.0, max_waits=2, history_window=8):
+                 wait_threshold_pct=5.0, max_waits=2, history_window=8,
+                 queue_order="fifo"):
         if name not in self.NAMES:
             raise ValueError(f"Unknown queue policy {name}")
+        if queue_order not in VALID_QUEUE_ORDERS:
+            raise ValueError("Unsupported queue order")
         if risk_buffer_minutes < 0 or wait_threshold_pct < 0 or max_waits < 1 or history_window < 4:
             raise ValueError("Invalid queue policy settings")
         self.name = name
+        self.queue_order = queue_order
         self.delay_fn = SpatialPolicy("sla_carbon", delay_fn=delay_fn).delay_fn
         self.risk_buffer = timedelta(minutes=risk_buffer_minutes)
         self.wait_threshold_pct = wait_threshold_pct
@@ -154,7 +166,8 @@ class QueueRiskCarbonPolicy:
             ticks = max(1, math.ceil(delay / step_seconds))
             finish = predict_finish(
                 task, dc, current_time, ticks, step_seconds,
-                known_arrivals=self.known_arrivals_by_dc.get(dc.dc_id, ())
+                known_arrivals=self.known_arrivals_by_dc.get(dc.dc_id, ()),
+                queue_order=self.queue_order
             )
             if finish is None:
                 continue

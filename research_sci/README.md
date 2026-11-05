@@ -457,3 +457,39 @@ This is an **observational one-job-at-a-time counterfactual** with
 fixed past commitments. Rerouting one job would alter future
 queues/arrivals and must be simulated in a separate matched policy
 experiment before an SLA rescue or carbon improvement can be claimed.
+
+## Predeclared queue scheduling ablation: FIFO versus EDF
+
+The experiment `queue_priority_experiment.py` compares the original FIFO
+datacenter pending queue with an opt-in **earliest absolute deadline first
+(EDF)** queue. Both retain the same chronological training arrivals,
+fixed 30-minute risk margin, task-level action space, data-center resource
+capacity and incoming test workload. EDF is installed ONLY at the
+test-phase boundary; training is FIFO for both treatments.
+
+The research-only wrapper sorts each data center's pending deque just
+before its ordinary `SustainDC.step`, AFTER newly arrived in-transit
+work is enqueued. The queue-aware finish-time predictor also sorts
+known FIFO arrivals by EDF before forecasting. All alternative
+placement decisions are thus consistent with the actual queue discipline.
+`fifo` is the untouched original default; `main` is not changed.
+
+The comparison is **joint routing+queue discipline**, not an isolated
+causal queue-order effect, because changed queue forecasts can change
+subsequent data-center routing decisions. EDF is a standard scheduling
+baseline and is not itself SCI innovation. Results include true SLA
+misses (completed and overdue unfinished), throughput and admitted
+work. Only when the actual *identical finished job set* is confirmed
+do we report a paired carbon-efficiency delta. We do not select EDF
+from these held-out results for re-testing on those same windows.
+
+```bash
+python -m research_sci.queue_priority_experiment --seeds 1 42 \
+  --capacity-scales 0.02 0.1 --test-start-ticks 288 448 \
+  --output research_sci/results/queue_priority.json
+```
+
+The predeclared two-window, two-capacity, two-seed stress still uses a
+single Alibaba-derived workload trace and gapped counterfactual
+replays. Even a favorable result is preliminary, not statistically
+validated carbon/SLA superiority or a risk guarantee.
