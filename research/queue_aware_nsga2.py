@@ -407,6 +407,51 @@ def relevant_transit_competition(dc, arrivals, now, pending_transit):
     return any(x > limit + 1e-8 for x, limit in zip(required, capacity)), naive
 
 
+def transit_may_compete_fast(dc, arrivals, now, pending_transit):
+    """Conservative O(number of tasks) gate, no base projection pre-pass.
+
+    False means the full With-Transit projection and the base predictor
+    MUST have the same new-task start times under the simulator's FIFO
+    discrete-time abstraction. True means simulate all observable transit
+    once. This rule is a computation shortcut, NOT carbon/SLA gating.
+    """
+    if not arrivals or not pending_transit:
+        return False
+    arrival_ids = {id(task) for task, _ in arrivals}
+    if len(arrival_ids) != len(arrivals):
+        raise AssertionError("duplicate task in new arrivals")
+    if any(id(task) in arrival_ids for _, task in pending_transit):
+        raise AssertionError("task duplicated in current action and in-transit")
+    if dc.running_tasks or dc.pending_tasks:
+        return True
+    limits = (float(dc.available_cores), float(dc.available_gpus),
+              float(dc.available_mem))
+    total = (float(dc.total_cores), float(dc.total_gpus),
+             float(dc.total_mem_GB))
+    def required(tasks):
+        return (
+            sum(float(t.cores_req) for t in tasks),
+            sum(float(t.gpu_req) for t in tasks),
+            sum(float(t.mem_req) for t in tasks),
+        )
+    # Invalid tasks must still follow the projection's capacity exception.
+    transit_tasks = [task for _, task in pending_transit]
+    all_tasks = [task for task, _ in arrivals] + transit_tasks
+    if any(any(v > bound + 1e-8 for v, bound in
+               zip(required([task]), total)) for task in all_tasks):
+        return True
+    if all(x <= limit + 1e-8 for x, limit in zip(required(all_tasks), limits)):
+        return False
+    # Every new task can occupy capacity at the current tick, before any
+    # in-transit task becomes eligible; starts are then already determined.
+    if (all(ready <= now for _, ready in arrivals)
+            and all(max(now, eta) > now for eta, _ in pending_transit)
+            and all(x <= limit + 1e-8 for x, limit in zip(
+                required([task for task, _ in arrivals]), limits))):
+        return False
+    return True
+
+
 class QueueAwareCongestionAdaptive(QueueAwareWithTransit):
     """Conditional transit-state queue projection, exploratory ablation.
 
@@ -426,16 +471,12 @@ class QueueAwareCongestionAdaptive(QueueAwareWithTransit):
 
     def _project_starts(self, dc, arrivals, now):
         self.adaptive_projection_checks += 1
-        relevant, base_prediction = relevant_transit_competition(
-            dc, arrivals, now, self._pending_transit_by_dc.get(dc.dc_id, [])
-        )
-        if relevant:
+        pending = self._pending_transit_by_dc.get(dc.dc_id, [])
+        if transit_may_compete_fast(dc, arrivals, now, pending):
             self.adaptive_transit_projections += 1
-            return predict_starts_with_in_transit(
-                dc, arrivals, now, self._pending_transit_by_dc.get(dc.dc_id, [])
-            )
+            return predict_starts_with_in_transit(dc, arrivals, now, pending)
         self.adaptive_base_projections += 1
-        return base_prediction
+        return predict_starts(dc, arrivals, now)
 
 
 class QueueAwareCarbonSlaGuard(QueueAwareNSGA2Policy):
