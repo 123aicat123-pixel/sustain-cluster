@@ -369,6 +369,75 @@ class QueueAwareWithTransit(QueueAwareNSGA2Policy):
         )
 
 
+def relevant_transit_competition(dc, arrivals, now, pending_transit):
+    """Check whether observed incoming transfers *could* change batch starts.
+
+    Conservative deterministic gate: only skip transit projection when no
+    transfer can arrive by the last base-predicted start, OR when there is
+    no running/pending load and enough currently available CPU/GPU/memory
+    to start every relevant transit task and every new task together.
+    No future workload, realized completion, carbon or SLA labels used.
+
+    Returns (transit_relevant, naive_prediction). It may over-trigger,
+    but the no-overlap and full-capacity skip cases are safe shortcuts
+    for this simplified FIFO queue model. No empirical threshold is tuned.
+    """
+    if not arrivals:
+        return False, {}
+    naive = predict_starts(dc, arrivals, now)
+    if not pending_transit:
+        return False, naive
+    latest_base_start = max(naive.values())
+    relevant = [
+        (eta, task) for eta, task in pending_transit
+        if max(now, eta) <= latest_base_start
+    ]
+    if not relevant:
+        return False, naive
+    if dc.running_tasks or dc.pending_tasks:
+        return True, naive
+    tasks = [task for task, _ in arrivals] + [task for _, task in relevant]
+    capacity = (float(dc.available_cores), float(dc.available_gpus),
+                float(dc.available_mem))
+    required = (
+        sum(float(t.cores_req) for t in tasks),
+        sum(float(t.gpu_req) for t in tasks),
+        sum(float(t.mem_req) for t in tasks),
+    )
+    return any(x > limit + 1e-8 for x, limit in zip(required, capacity)), naive
+
+
+class QueueAwareCongestionAdaptive(QueueAwareWithTransit):
+    """Conditional transit-state queue projection, exploratory ablation.
+
+    The policy keeps the *exact* genetic algorithm, chromosome, action
+    candidates and weights of WithTransit. It uses a no-parameter capacity
+    relevance gate to skip unnecessary in-transit projection. The selection
+    and actual simulator metrics still require fresh comparison. Projection
+    counters include repeated fitness evaluations and the final audit call;
+    they are NOT counts of distinct online decision epochs.
+    """
+
+    def reset(self):
+        super().reset()
+        self.adaptive_projection_checks = 0
+        self.adaptive_transit_projections = 0
+        self.adaptive_base_projections = 0
+
+    def _project_starts(self, dc, arrivals, now):
+        self.adaptive_projection_checks += 1
+        relevant, base_prediction = relevant_transit_competition(
+            dc, arrivals, now, self._pending_transit_by_dc.get(dc.dc_id, [])
+        )
+        if relevant:
+            self.adaptive_transit_projections += 1
+            return predict_starts_with_in_transit(
+                dc, arrivals, now, self._pending_transit_by_dc.get(dc.dc_id, [])
+            )
+        self.adaptive_base_projections += 1
+        return base_prediction
+
+
 class QueueAwareCarbonSlaGuard(QueueAwareNSGA2Policy):
     def __init__(self, **kwargs):
         super().__init__(queue_aware=True, transfer_accounting=True,
