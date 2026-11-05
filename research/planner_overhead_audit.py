@@ -16,12 +16,32 @@ def audit_planner_rows(rows):
     names = [row["policy"] for row in rows]
     if len(names) != len(set(names)):
         raise AssertionError("duplicate policies in one smoke audit")
+    # A fast planner that leaves jobs unresolved is not a fair speed win.
+    # All policies in one smoke must share the scenario, seed and admitted
+    # cohort size. Exact task identity belongs to paired-task audits.
+    cohort_fields = (
+        "seed", "scenario_start_month", "scenario_start_day",
+        "cpu_capacity_scale", "tasks_dispatched"
+    )
+    for field in cohort_fields:
+        if len({str(row[field]) for row in rows}) != 1:
+            raise AssertionError(f"unmatched planner cohorts: {field}")
     report = []
     for row in rows:
+        dispatched = int(row["tasks_dispatched"])
+        finished = int(row["tasks_finished"])
+        if dispatched <= 0 or finished != dispatched:
+            raise AssertionError("planner comparison has unfinished task cohort")
+        if int(row["unfinished_dispatched"]) != 0:
+            raise AssertionError("planner comparison has unresolved tasks")
+        if int(row["fallback_assignments"]) != 0:
+            raise AssertionError("planner comparison has fallback actions")
+        if not bool(row["fully_drained"]) or not bool(row["lifecycle_conserved"]):
+            raise AssertionError("planner comparison failed lifecycle completion")
         calls = int(row["planner_dispatch_calls"])
         tasks = int(row["planner_dispatched_tasks"])
         duration = float(row["planner_dispatch_seconds"])
-        if calls <= 0 or tasks <= 0 or tasks < calls:
+        if calls <= 0 or tasks <= 0 or tasks < calls or tasks != dispatched:
             raise AssertionError("missing planner dispatch coverage")
         if not math.isfinite(duration) or duration < 0:
             raise AssertionError("invalid planner wall time")
