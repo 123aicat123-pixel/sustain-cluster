@@ -140,11 +140,15 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             alpha=0.1, min_samples=20, sim_duration_days=None,
             audit_states=False, state_audit_dir=None,
             audit_candidates=False, candidate_audit_dir=None,
-            heldout_queue_order="fifo"):
+            heldout_queue_order="fifo", heldout_forecast_order=None):
     if treatment not in TREATMENTS:
         raise ValueError(f"Unknown treatment {treatment}")
     if heldout_queue_order not in VALID_QUEUE_ORDERS:
         raise ValueError("Unsupported heldout queue discipline")
+    if heldout_forecast_order is None:
+        heldout_forecast_order = heldout_queue_order
+    if heldout_forecast_order not in VALID_QUEUE_ORDERS:
+        raise ValueError("Unsupported forecast queue discipline")
     total_steps = calibration_steps + gap_steps + test_steps + drain_steps
     # These must fit the chosen fixed 15-minute time grid.
     timeline_phase(total_steps-1, calibration_steps, gap_steps, test_steps, drain_steps)
@@ -193,6 +197,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             metrics = {
                 "seed": seed, "treatment": treatment,
                 "queue_discipline": heldout_queue_order,
+                "forecast_queue_discipline": heldout_forecast_order,
                 "capacity_scale": capacity_scale,
                 "calibration_steps": calibration_steps, "gap_steps": gap_steps,
                 "test_steps": test_steps, "drain_steps": drain_steps,
@@ -243,7 +248,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                     })
                     test_policy = QueueRiskCarbonPolicy(
                         "queue_risk_carbon", risk_buffer_minutes=frozen_margin,
-                        queue_order=heldout_queue_order
+                        queue_order=heldout_forecast_order
                     )
                     if heldout_queue_order != "fifo":
                         install_queue_discipline(
@@ -292,7 +297,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                             task, dc, now, ticks,
                             step_seconds=int(dt.total_seconds()),
                             known_arrivals=in_transit[effective_id],
-                            queue_order=(heldout_queue_order
+                            queue_order=(heldout_forecast_order
                                          if phase == "heldout" else "fifo"),
                         )
                         eta = max(now + dt, now + timedelta(seconds=delay))
@@ -306,7 +311,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                             effective_id, step_seconds=int(dt.total_seconds()),
                             buffer_minutes=frozen_margin,
                             forced_origin=forced,
-                            queue_order=heldout_queue_order
+                            queue_order=heldout_forecast_order
                         )
                     if phase == "heldout" and audit_states:
                         heldout_state_snapshots[task] = snapshot_decision(
