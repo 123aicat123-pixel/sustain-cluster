@@ -5,6 +5,8 @@ on:
     branches: [research-baselines]
     paths:
       - "research/single_route_intervention.py"
+      - "research/single_route_intervention_audit.py"
+      - "research/tests/test_single_route_intervention_audit.py"
       - "research/tests/test_single_route_intervention.py"
       - "research/unified_baseline_smoke.py"
       - ".github/workflows/research-single-route-intervention.yml"
@@ -37,6 +39,7 @@ jobs:
           mkdir -p research/results
           set -o pipefail
           python -m unittest discover -s research/tests -p 'test_single_route_intervention.py' -v 2>&1 | tee research/results/route_probe_contracts.log
+          python -m unittest discover -s research/tests -p 'test_single_route_intervention_audit.py' -v 2>&1 | tee research/results/route_probe_audit_contracts.log
       - name: Run matched 12-horizon exploratory intervention simulations
         run: |
           set -o pipefail
@@ -88,6 +91,12 @@ jobs:
                         "transmission delta kg",p["transmission_carbon_kg"]-ref["transmission_carbon_kg"],
                         "cost delta USD",p["reported_total_cost_usd"]-ref["reported_total_cost_usd"])
           PY
+      - name: Independently assert EXACTLY ONE changed realized task route
+        run: |
+          set -o pipefail
+          python -m research.single_route_intervention_audit \
+            --prefix "research/results/single_route_${{ matrix.case.name }}" \
+            2>&1 | tee "research/results/single_route_${{ matrix.case.name }}_paired_route_audit.log"
       - name: Explain full facility IT HVAC and carbon-intensity impacts
         run: |
           set -o pipefail
