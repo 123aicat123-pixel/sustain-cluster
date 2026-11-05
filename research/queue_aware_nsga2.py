@@ -78,7 +78,7 @@ def carbon_sla_guard_choice(optimized, reference, evaluate, margin=0.0):
     return list(reference), True, False
 
 
-def predict_starts(dc, arrivals, now, max_steps=672):
+def predict_starts(dc, arrivals, now, max_steps=672, *, indexed_membership=False):
     """Predict new-task start timestamps by simulating CURRENT FIFO queues.
 
     `arrivals` holds (new_task, datetime eligible) in decision-batch order.
@@ -108,6 +108,10 @@ def predict_starts(dc, arrivals, now, max_steps=672):
     waiting = sorted(enumerate(arrivals), key=lambda x: (x[1][1], x[0]))
     cursor = 0
     begins = {}
+    # Controlled data-structure ablation. Legacy rebuilds dict(arrivals)
+    # for each task that starts; the indexed variant creates one set per
+    # projection. Both preserve Task hashing/equality semantics.
+    new_task_lookup = {task for task, _ in arrivals} if indexed_membership else None
     for step in range(max_steps + 1):
         tick = now + step * STEP
         still_running = []
@@ -128,7 +132,8 @@ def predict_starts(dc, arrivals, now, max_steps=672):
                 available = [a - x for a, x in zip(available, resources)]
                 end = tick + timedelta(minutes=float(task.duration))
                 scheduled.append((end, task))
-                if task in dict(arrivals):
+                if (task in new_task_lookup if indexed_membership
+                        else task in dict(arrivals)):
                     if task in begins:
                         raise AssertionError("new task scheduled twice")
                     begins[task] = tick
@@ -139,7 +144,8 @@ def predict_starts(dc, arrivals, now, max_steps=672):
     raise RuntimeError("queue projection exhausted: choose longer horizon")
 
 
-def predict_starts_with_in_transit(dc, new_arrivals, now, pending_transit):
+def predict_starts_with_in_transit(dc, new_arrivals, now, pending_transit,
+                                   *, indexed_membership=False):
     """Project starts with tasks ALREADY routed to this DC and still in transit.
 
     `pending_transit` has (arrival_timestamp, task) tuples for this DC.
@@ -153,7 +159,9 @@ def predict_starts_with_in_transit(dc, new_arrivals, now, pending_transit):
         return {}
     if len({id(t) for t, _ in merged}) != len(merged):
         raise AssertionError("task duplicated in current action and in-transit")
-    projection = predict_starts(dc, merged, now)
+    projection = predict_starts(
+        dc, merged, now, indexed_membership=indexed_membership
+    )
     return {task: projection[task] for task, _ in new_arrivals}
 
 
@@ -371,6 +379,8 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
 class QueueAwareWithTransit(QueueAwareNSGA2Policy):
     """Controlled in-transit queue ablation, all other NSGA-II settings equal."""
 
+    indexed_membership = False
+
     def __init__(self, **kwargs):
         super().__init__(queue_aware=True, transfer_accounting=True, **kwargs)
 
@@ -399,10 +409,17 @@ class QueueAwareWithTransit(QueueAwareNSGA2Policy):
             return predict_starts_with_in_transit(
                 dc, arrivals, now,
                 self._pending_transit_by_dc.get(dc.dc_id, []),
+                indexed_membership=self.indexed_membership,
             )
         finally:
             self.planner_projection_calls += 1
             self.planner_projection_seconds += time.perf_counter() - started
+
+
+class QueueAwareIndexedTransit(QueueAwareWithTransit):
+    """Ablate only per-start dict rebuild; preserve search and FIFO semantics."""
+
+    indexed_membership = True
 
 
 def relevant_transit_competition(dc, arrivals, now, pending_transit):
