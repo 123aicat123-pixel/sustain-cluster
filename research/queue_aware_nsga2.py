@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections import deque
 from datetime import timedelta
 import math
+import time
 
 from data.network_cost.network_delay import get_transmission_delay
 from research.nsga2_batch_policy import NSGA2BatchPolicy
@@ -376,6 +377,10 @@ class QueueAwareWithTransit(QueueAwareNSGA2Policy):
     def reset(self):
         super().reset()
         self._pending_transit_by_dc = {}
+        # Timing is observational and includes each actual projection call,
+        # including cached GA candidate evaluations and post-choice audits.
+        self.planner_projection_calls = 0
+        self.planner_projection_seconds = 0.0
 
     def set_in_transit(self, in_transit_items, datacenters):
         # Input comes from environment.in_transit_tasks at decision time,
@@ -389,10 +394,15 @@ class QueueAwareWithTransit(QueueAwareNSGA2Policy):
         self._pending_transit_by_dc = by_dc
 
     def _project_starts(self, dc, arrivals, now):
-        return predict_starts_with_in_transit(
-            dc, arrivals, now,
-            self._pending_transit_by_dc.get(dc.dc_id, []),
-        )
+        started = time.perf_counter()
+        try:
+            return predict_starts_with_in_transit(
+                dc, arrivals, now,
+                self._pending_transit_by_dc.get(dc.dc_id, []),
+            )
+        finally:
+            self.planner_projection_calls += 1
+            self.planner_projection_seconds += time.perf_counter() - started
 
 
 def relevant_transit_competition(dc, arrivals, now, pending_transit):
@@ -494,15 +504,30 @@ class QueueAwareCongestionAdaptive(QueueAwareWithTransit):
         self.adaptive_projection_checks = 0
         self.adaptive_transit_projections = 0
         self.adaptive_base_projections = 0
+        self.adaptive_gate_seconds = 0.0
 
     def _project_starts(self, dc, arrivals, now):
-        self.adaptive_projection_checks += 1
-        pending = self._pending_transit_by_dc.get(dc.dc_id, [])
-        if transit_may_compete_fast(dc, arrivals, now, pending):
-            self.adaptive_transit_projections += 1
-            return predict_starts_with_in_transit(dc, arrivals, now, pending)
-        self.adaptive_base_projections += 1
-        return predict_starts(dc, arrivals, now)
+        started = time.perf_counter()
+        try:
+            self.adaptive_projection_checks += 1
+            pending = self._pending_transit_by_dc.get(dc.dc_id, [])
+            gate_started = time.perf_counter()
+            try:
+                needs_transit = transit_may_compete_fast(
+                    dc, arrivals, now, pending
+                )
+            finally:
+                self.adaptive_gate_seconds += time.perf_counter() - gate_started
+            if needs_transit:
+                self.adaptive_transit_projections += 1
+                return predict_starts_with_in_transit(
+                    dc, arrivals, now, pending
+                )
+            self.adaptive_base_projections += 1
+            return predict_starts(dc, arrivals, now)
+        finally:
+            self.planner_projection_calls += 1
+            self.planner_projection_seconds += time.perf_counter() - started
 
 
 class QueueAwareFrontCarbonRisk(QueueAwareWithTransit):
