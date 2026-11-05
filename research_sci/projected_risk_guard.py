@@ -146,6 +146,11 @@ class ProjectedRiskGuard:
             if reference is None:
                 predicted_late_base+=1
                 buffered_base+=1
+                predicted_late_beam+=int(finish is None or finish>task.sla_deadline)
+                buffered_beam+=int(
+                    finish is None or
+                    (task.sla_deadline-finish).total_seconds()/60.<self.buffer_minutes
+                )
                 if finish is not None:
                     strict_finish_better=True
                 # A still-missing forecast is not a positive result.
