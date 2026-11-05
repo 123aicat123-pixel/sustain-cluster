@@ -259,3 +259,27 @@ jobs:
           name: sci-carbon-queue-priority
           path: research_sci/results/queue_priority*
           if-no-files-found: warn
+
+  queue-factorial-ablation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: |
+          unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Separate true FIFO EDF execution effects from routing forecast effects
+        run: |
+          python -m research_sci.queue_factorial_ablation --seeds 1 42 --capacity-scales 0.02 0.1 --test-start-ticks 288 448 --output research_sci/results/queue_factorial.json
+      - name: Upload queue factorial ablation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sci-carbon-queue-factorial
+          path: research_sci/results/queue_factorial*
+          if-no-files-found: warn
