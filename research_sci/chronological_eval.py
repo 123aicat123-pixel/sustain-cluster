@@ -26,6 +26,7 @@ from research_sci.queue_risk import QueueRiskCarbonPolicy, predict_finish
 from research_sci.state_risk_audit import snapshot_decision, audit_state_risk
 from research_sci.action_feasibility_audit import evaluate_candidates, summarize_candidate_audit
 from research_sci.queue_discipline import VALID_QUEUE_ORDERS, install_queue_discipline
+from research_sci.joint_batch import JointBatchCarbonPlanner
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/env/sim_config.yaml"
@@ -140,7 +141,8 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             alpha=0.1, min_samples=20, sim_duration_days=None,
             audit_states=False, state_audit_dir=None,
             audit_candidates=False, candidate_audit_dir=None,
-            heldout_queue_order="fifo", heldout_forecast_order=None):
+            heldout_queue_order="fifo", heldout_forecast_order=None,
+            heldout_batch_planner="greedy"):
     if treatment not in TREATMENTS:
         raise ValueError(f"Unknown treatment {treatment}")
     if heldout_queue_order not in VALID_QUEUE_ORDERS:
@@ -149,6 +151,12 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
         heldout_forecast_order = heldout_queue_order
     if heldout_forecast_order not in VALID_QUEUE_ORDERS:
         raise ValueError("Unsupported forecast queue discipline")
+    if heldout_batch_planner not in ("greedy","beam4"):
+        raise ValueError("Unsupported heldout batch planner")
+    if heldout_batch_planner == "beam4" and (
+        heldout_queue_order != "fifo" or heldout_forecast_order != "fifo"
+    ):
+        raise ValueError("Joint batch baseline requires matched FIFO execution/forecast")
     total_steps = calibration_steps + gap_steps + test_steps + drain_steps
     # These must fit the chosen fixed 15-minute time grid.
     timeline_phase(total_steps-1, calibration_steps, gap_steps, test_steps, drain_steps)
@@ -194,10 +202,15 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             heldout_candidate_snapshots = {}
             heldout_decision_buffers = {}
             heldout_routes = []
+            joint_planner = None
             metrics = {
                 "seed": seed, "treatment": treatment,
                 "queue_discipline": heldout_queue_order,
                 "forecast_queue_discipline": heldout_forecast_order,
+                "batch_planner": heldout_batch_planner,
+                "test_joint_batch_plans": 0,
+                "test_joint_beam_expansions": 0,
+                "test_joint_chunks": 0,
                 "capacity_scale": capacity_scale,
                 "calibration_steps": calibration_steps, "gap_steps": gap_steps,
                 "test_steps": test_steps, "drain_steps": drain_steps,
@@ -250,6 +263,11 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                         "queue_risk_carbon", risk_buffer_minutes=frozen_margin,
                         queue_order=heldout_forecast_order
                     )
+                    if heldout_batch_planner == "beam4":
+                        joint_planner = JointBatchCarbonPlanner(
+                            risk_buffer_minutes=frozen_margin,
+                            beam_width=4, chunk_size=8
+                        )
                     if heldout_queue_order != "fifo":
                         install_queue_discipline(
                             env.cluster_manager.datacenters,
@@ -265,13 +283,32 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                 tasks = list(env.current_tasks)
                 if phase in ("calibration_drain", "heldout_drain") and tasks:
                     raise AssertionError("Unexpected newly admitted tasks during drain")
+                joint_routes = {}
+                joint_predicted = {}
+                if phase == "heldout" and joint_planner is not None and tasks:
+                    batch_result = joint_planner.plan(
+                        tasks, env.cluster_manager.datacenters,
+                        now, env.cluster_manager, in_transit,
+                        step_seconds=int(dt.total_seconds())
+                    )
+                    joint_routes = dict(zip(tasks,batch_result["routes"]))
+                    joint_predicted = dict(zip(tasks,batch_result["predictions"]))
+                    if len(joint_routes) != len(tasks):
+                        raise AssertionError("Joint planner duplicated batch tasks")
+                    metrics["test_joint_batch_plans"] += 1
+                    metrics["test_joint_beam_expansions"] += batch_result["expansions"]
+                    metrics["test_joint_chunks"] += batch_result["chunks"]
                 actions = []
                 for task in tasks:
-                    dc_id, fallback = policy.choose(
-                        task, env.cluster_manager.datacenters,
-                        now, env.cluster_manager,
-                        step_seconds=int(dt.total_seconds()),
-                    )
+                    if phase == "heldout" and joint_planner is not None:
+                        dc_id = joint_routes[task]
+                        fallback = False
+                    else:
+                        dc_id, fallback = policy.choose(
+                            task, env.cluster_manager.datacenters,
+                            now, env.cluster_manager,
+                            step_seconds=int(dt.total_seconds()),
+                        )
                     if dc_id == 0:
                         raise AssertionError("This paired holdout disallows temporal deferral")
                     if dc_id not in index_action:
@@ -301,6 +338,12 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                                          if phase == "heldout" else "fifo"),
                         )
                         eta = max(now + dt, now + timedelta(seconds=delay))
+                    if phase == "heldout" and joint_planner is not None:
+                        if prediction != joint_predicted[task]:
+                            raise AssertionError(
+                                "Batch planner forecast disagrees with actual "
+                                "committed route/order"
+                            )
                     if phase == "heldout" and audit_candidates:
                         # Must run before the selected task joins in_transit;
                         # all alternative centers see the SAME prior batch

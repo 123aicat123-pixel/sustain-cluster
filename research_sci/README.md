@@ -534,3 +534,42 @@ state; real SLA misses, unfinished overdue jobs, and CO2 are measured.
 Paired CO2 delta is null unless *exactly the same jobs finish*. These
 are exploratory same-trace synthetic stress results and no
 out-of-sample learning or novel EDF algorithm is claimed.
+
+## Bounded joint batch assignment pilot (FIFO queue preserved)
+
+`joint_batch.py` and `joint_batch_study.py` introduce a **predeclared
+deterministic 4-beam / 8-task-chunk lookahead** over the current visible
+task batch. The original FIFO execution queue and its FIFO
+`predict_finish` model remain unchanged in BOTH arms. Training is
+identical in both. The beam carries branch-specific reservations for
+known in-transit jobs and earlier assignments; each branch checks all
+available centers and keeps the four best partial assignments in the
+**actual environment action order**.
+
+The lexicographic objective first minimizes optimistic predicted
+deadline misses, then summed predicted lateness, then predicted risk
+buffer shortfalls, and finally a *CPU/GPU/memory work-weighted CURRENT
+carbon intensity proxy*. This proxy is NOT simulated marginal facility
+or network carbon emissions and gives no calibrated SLA guarantee.
+Prediction is arrival-blind beyond currently known commitments.
+
+```bash
+python -m research_sci.joint_batch_study --seeds 1 42 \
+  --capacity-scales 0.02 0.1 --test-start-ticks 288 448 \
+  --output research_sci/results/joint_batch_study.json
+```
+
+Eight paired simulator scenarios use the same seeds, arrivals,
+original-capacity mapping, seven-day duration, and train/test
+chronological separation. Neither beam width nor chunk size is
+tuned on heldout. We compare true SLA failures including overdue,
+completed-job identities/throughput, actual total facility+network
+emissions and route changes. No carbon-efficiency percentage is
+reported when exact finished job sets differ.
+
+**Scope limitation:** bounded beam search and separate chunks are
+not optimal whole-batch search; prefix queue forecasts can miss
+interaction effects from later tasks and later exogenous arrivals.
+The algorithm is a research heuristic baseline, not a novel RL
+method or SCI result by itself. Any comparative improvement requires
+independent broader workload validation.
