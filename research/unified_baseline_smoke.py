@@ -28,6 +28,7 @@ import yaml
 from train_SAC_agent import make_env
 from research.lifecycle_audit import audit_lifecycle
 from research.physical_accounting import validate_datacenter_step
+from research.facility_telemetry import facility_cell
 from research.queue_prediction_audit import audit_forecasts
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
@@ -88,7 +89,7 @@ def choose_actions(policy, tasks, datacenters):
     return actions, fallbacks
 
 
-def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_capacity_scale=1.0, start_month=None, start_day=None, prediction_records=None):
+def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_capacity_scale=1.0, start_month=None, start_day=None, prediction_records=None, facility_records=None):
     if policy_name not in POLICIES:
         raise ValueError(f"Unknown baseline: {policy_name}")
     if not 0 < cpu_capacity_scale <= 1:
@@ -176,7 +177,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         seen = set()
         dispatched = set()
         finished = set()
-        for _ in range(steps + drain_steps):
+        for step_index in range(steps + drain_steps):
             if policy_name == "edf_sla_carbon":
                 # EDF is a priority rule, not just a destination rule: modifying
                 # the task order changes arrival order in shared DC queues.
@@ -215,7 +216,11 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
             _, _, terminated, truncated, info = env.step(acts)
             summary["steps_completed"] += 1
             pending = 0
-            for dc_info in info["datacenter_infos"].values():
+            for dc_name, dc_info in info["datacenter_infos"].items():
+                if facility_records is not None:
+                    facility_records.append(facility_cell(
+                        seed=seed, policy=policy_name, step_index=step_index,
+                        dc_name=dc_name, dc_info=dc_info))
                 validate_datacenter_step(dc_info)
                 c = dc_info["__common__"]
                 summary["facility_energy_kwh"] += float(c["energy_consumption_kwh"])
