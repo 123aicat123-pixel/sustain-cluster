@@ -48,6 +48,18 @@ def compare_adaptive_runs(rows):
             if not math.isfinite(x):
                 raise AssertionError(f"nonfinite outcome {field}")
             return x
+        for item in (base, candidate):
+            projection_calls = int(item.get("planner_projection_calls", 0))
+            projection_seconds = float(item.get("planner_projection_seconds", 0.0))
+            gate_seconds = float(item.get("adaptive_gate_seconds", 0.0))
+            decision_seconds = float(item["planner_dispatch_seconds"])
+            if (projection_calls <= 0 or not all(math.isfinite(v) and v >= 0
+                for v in (projection_seconds, gate_seconds, decision_seconds))
+                or projection_seconds > decision_seconds + 1e-6
+                or gate_seconds > projection_seconds + 1e-6):
+                raise AssertionError("invalid projection/gate timing accounting")
+        if int(candidate["planner_projection_calls"]) != checks:
+            raise AssertionError("projection call count does not match adaptive checks")
         output.append({
             "month": key[0], "day": key[1], "cpu_scale": key[2], "seed": key[3],
             "tasks": int(candidate["tasks_dispatched"]),
@@ -56,6 +68,13 @@ def compare_adaptive_runs(rows):
             "adaptive_base_projections": skipped,
             "adaptive_transit_projections": computed,
             "evaluation_requests": candidate_requests,
+            "projection_seconds_delta": difference("planner_projection_seconds"),
+            "adaptive_gate_seconds": float(candidate["adaptive_gate_seconds"]),
+            "adaptive_projection_fraction_of_dispatch_time": (
+                float(candidate["planner_projection_seconds"]) /
+                float(candidate["planner_dispatch_seconds"])
+                if float(candidate["planner_dispatch_seconds"]) > 0 else None
+            ),
             "p95_ms_delta": by_name[ADAPT]["p95_ms"] - by_name[BASE]["p95_ms"],
             "ms_per_task_delta": (by_name[ADAPT]["ms_per_task"]
                                   - by_name[BASE]["ms_per_task"]),
