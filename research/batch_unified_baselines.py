@@ -69,6 +69,8 @@ def main():
         "--output-prefix", type=Path,
         default=ROOT / "research/results/unified_batch"
     )
+    parser.add_argument("--record-facility-telemetry", action="store_true",
+                        help="Write post-step DC+time energy/carbon telemetry (audit only)")
     args = parser.parse_args()
     if not args.seeds or len(set(args.seeds)) != len(args.seeds):
         parser.error("--seeds must be nonempty and unique")
@@ -77,11 +79,13 @@ def main():
     results = []
     completed_rows = []
     prediction_rows = []
+    facility_rows = []
     # Run every policy with each identical seed, avoiding random generator
     # coupling between consecutive policies.
     for seed in args.seeds:
         for policy in args.policies:
-            row = run(policy, seed, args.steps, drain_steps=args.drain_steps, completed_records=completed_rows, cpu_capacity_scale=args.cpu_capacity_scale, start_month=args.start_month, start_day=args.start_day, prediction_records=prediction_rows)
+            row = run(policy, seed, args.steps, drain_steps=args.drain_steps, completed_records=completed_rows, cpu_capacity_scale=args.cpu_capacity_scale, start_month=args.start_month, start_day=args.start_day, prediction_records=prediction_rows,
+                      facility_records=facility_rows if args.record_facility_telemetry else None)
             results.append(row)
             print(f"completed: seed={seed} policy={policy} "
                   f"cost={row['reported_total_cost_usd']:.3f} "
@@ -114,6 +118,20 @@ def main():
             detail=csv.DictWriter(f,fieldnames=list(prediction_rows[0]))
             detail.writeheader()
             detail.writerows(prediction_rows)
+    if args.record_facility_telemetry:
+        from research.facility_telemetry import verify_facility_telemetry
+        audit=verify_facility_telemetry(facility_rows,results)
+        facility_path=Path(str(prefix)+"_facility_cells.csv")
+        if not facility_rows:
+            raise AssertionError("facility telemetry enabled without any cells")
+        with facility_path.open("w", newline="", encoding="utf8") as f:
+            writer=csv.DictWriter(f,fieldnames=union_csv_fieldnames(facility_rows))
+            writer.writeheader()
+            writer.writerows(facility_rows)
+        audit_path=Path(str(prefix)+"_facility_audit.json")
+        audit_path.write_text(json.dumps(audit,indent=2,allow_nan=False)+"\\n",
+                              encoding="utf8")
+        print("Wrote facility telemetry",facility_path,audit_path)
     summary=summarize(results)
     summarypath.write_text(json.dumps(summary,indent=2,allow_nan=False),encoding="utf8")
     print("Wrote",str(jsonpath),str(csvpath),str(summarypath),str(taskspath))
