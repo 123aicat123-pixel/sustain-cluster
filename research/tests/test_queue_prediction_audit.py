@@ -8,6 +8,7 @@ from research.queue_prediction_audit import audit_forecasts
 def make_task(name,actual,origin,dest):
     item=type("DummyTask",(),{})()
     item.job_name=name
+    item.arrival_time=actual-timedelta(minutes=30)
     item.start_time=actual
     item.duration=10
     item.finish_time=actual+timedelta(minutes=10)
@@ -40,6 +41,8 @@ class TestStartPredictionAudit(unittest.TestCase):
         self.assertEqual(metrics["forecast_remote_mae_minutes"],15)
         self.assertEqual(metrics["forecast_local_mae_minutes"],15)
         self.assertTrue(any(r["is_remote"] for r in rows))
+        self.assertEqual({r["arrival_utc"] for r in rows},
+                         {self.a.arrival_time.isoformat(), self.b.arrival_time.isoformat()})
         self.assertEqual(metrics["forecast_false_safe_count"],1)
         self.assertEqual(metrics["forecast_actual_sla_misses"],2)
         self.assertEqual(metrics["forecast_predicted_sla_misses"],1)
