@@ -1,41 +1,17 @@
-"""Batch summaries retain timing metrics without importing heavy simulator deps."""
-import ast
-from pathlib import Path
-import statistics
+"""Batch summary contracts without simulator dependencies."""
 import unittest
-
-
-SOURCE = Path(__file__).resolve().parents[1] / "batch_unified_baselines.py"
-
-
-def load_real_summary():
-    """Execute only the actual METRICS declaration and pure summarize function."""
-    tree = ast.parse(SOURCE.read_text(encoding="utf8"))
-    metrics = next(node for node in tree.body
-                   if isinstance(node, ast.Assign)
-                   and any(isinstance(t, ast.Name) and t.id == "METRICS"
-                           for t in node.targets))
-    summary = next(node for node in tree.body
-                   if isinstance(node, ast.FunctionDef)
-                   and node.name == "summarize")
-    module = ast.fix_missing_locations(ast.Module(
-        body=[metrics, summary], type_ignores=[]
-    ))
-    namespace = {"statistics": statistics}
-    exec(compile(module, str(SOURCE), "exec"), namespace)
-    return namespace["METRICS"], namespace["summarize"]
+from research.batch_metrics import METRICS, summarize
 
 
 class PlannerBatchSummaryTests(unittest.TestCase):
     def test_latency_and_budget_metrics_exported(self):
-        metrics, summarize = load_real_summary()
         expected = (
             "planner_dispatch_p50_ms", "planner_dispatch_p95_ms",
             "planner_dispatch_ms_per_task", "planner_dispatch_calls",
             "nsga2_evaluation_requests",
         )
         for key in expected:
-            self.assertIn(key, metrics)
+            self.assertIn(key, METRICS)
         rows = [
             {"policy": "queue_nsga2", "planner_dispatch_p50_ms": 2.0,
              "planner_dispatch_p95_ms": 8.0,
