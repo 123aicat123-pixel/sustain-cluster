@@ -654,3 +654,62 @@ historical background load, so this is a NEW standalone
 training-free policy comparison, not a direct statistical contrast
 against the original August results. The fixed thresholds, dates,
 window starts, seeds, and data-center capacities are unchanged.
+
+
+## Shadow-greedy projected SLA risk guard — November/December evaluation
+
+The `projected_risk_guard.py` implementation audits each batch
+**before actions are sent to the original FIFO simulator**. It first
+computes two hypothetical *full batch* assignments from exactly the
+same observed datacenter state, current arrivals and previously
+in-transit commitments: original sequential greedy and the
+reservation-aware 4x8 beam search. Every hypothetical branch
+maintains separate commitments, and neither reads actual future
+task outcomes or future workload arrivals.
+
+The **predeclared** variants are:
+
+- `greedy`: original FIFO task-at-a-time carbon-aware routing baseline.
+- `beam4`: unconditional 4-beam / 8-job-chunk joint lookahead.
+- `guard0`: accept the beam proposal only if **no job** has a
+  later *predicted* finish than the greedy shadow plan, and at least
+  one job is predicted earlier or the current work-weighted grid
+  intensity proxy is strictly reduced.
+- `guard15`: additionally allow a task originally predicted
+  buffered-safe (30-minute risk reserve) to be predicted at most
+  **15 minutes later**, without crossing that original 30-minute
+  deadline reserve. All other tasks remain protected by guard0.
+  A proposal with any missing forecast where greedy had one is
+  rejected. Both guard modes require a strictly projected gain.
+  A rejected batch uses the unmodified original greedy policy.
+
+This is **prediction-domain non-regression**, not a guarantee
+of real SLA safety. Future arrivals and model error may change
+outcomes. The carbon proxy is observed grid intensity scaled by
+current task resource demand, not measured marginal job CO2.
+
+November and December are locked future calendar slices of the
+same Alibaba dataset, not a separate dataset. The four policies
+are evaluated on paired seeds 1/42 and 2%/10% resource scale
+under the **explicit training-free fixed 30-minute policy protocol**
+used in the corrected September/October transfer (no historical
+calibration jobs). The hard queue-drain, SLA conservation, exact
+completed-work identity and measured facility+network carbon
+comparability checks remain in place.
+
+```bash
+python -m research_sci.projected_guard_transfer \
+  --month 11 --day 1 --seeds 1 42 \
+  --capacity-scales 0.02 0.1 --test-start-ticks 288 448 \
+  --output research_sci/results/projected_guard_november.json
+python -m research_sci.projected_guard_transfer \
+  --month 12 --day 1 --seeds 1 42 \
+  --capacity-scales 0.02 0.1 --test-start-ticks 288 448 \
+  --output research_sci/results/projected_guard_december.json
+```
+
+Risk margins, beam hyperparameters and guard tolerances are
+fixed BEFORE either November/December outcome is inspected. Do not
+reselect them based on these results and call the same time windows
+untouched tests. There is no formally calibrated SLA risk bound
+or claim of SCI significance.
