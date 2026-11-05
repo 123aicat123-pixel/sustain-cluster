@@ -5,6 +5,8 @@ on:
     branches: [research-baselines]
     paths:
       - "research/facility_telemetry.py"
+      - "research/facility_power_carbon_attribution.py"
+      - "research/tests/test_facility_power_carbon_attribution.py"
       - "research/facility_carbon_audit.py"
       - "research/unified_baseline_smoke.py"
       - "research/batch_unified_baselines.py"
@@ -39,6 +41,7 @@ jobs:
           set -o pipefail
           mkdir -p research/results
           python -m unittest discover -s research/tests -p 'test_facility_telemetry.py' -v 2>&1 | tee research/results/facility_unit.log
+          python -m unittest discover -s research/tests -p 'test_facility_power_carbon_attribution.py' -v 2>&1 | tee research/results/facility_power_unit.log
       - name: Collect post-step physical facility telemetry on explored dates only
         run: |
           set -o pipefail
