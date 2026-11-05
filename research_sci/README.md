@@ -713,3 +713,30 @@ fixed BEFORE either November/December outcome is inspected. Do not
 reselect them based on these results and call the same time windows
 untouched tests. There is no formally calibrated SLA risk bound
 or claim of SCI significance.
+
+
+### November/December environmental date-index integrity fix
+
+The first December CI attempt at commit `afbc6093` failed before
+policy evaluation with
+`IndexError: index 35040 is out of bounds for axis 0 with size 35040`
+inside the upstream weather manager. The upstream `make_env` uses
+`int(month*30.5+day)` rather than a real zero-based calendar day
+to initialize DC environmental traces. In December this exceeds
+the 365-day array near calendar year-end. November was also
+seasonally shifted by this approximation.
+
+The **research-only** `_create_env` path now corrects
+`cluster_manager.init_day` to the exact non-leap 2023
+zero-based calendar ordinal for the **new** November/December
+comparisons, before `env.reset`, with an explicit seven-day
+environmental bounds check. November and December are both
+rerun after this change; no new-month completed results were
+used to choose algorithm thresholds or routing preferences.
+Older August/September/October published exploratory results
+are left in their original calendar protocol; do not pool their
+seasonal grid results with the corrected November/December
+climate alignment without repeating them under the same fix.
+
+This is a simulator date integrity repair, **not** proof of
+algorithmic performance or a modification to `main`.
