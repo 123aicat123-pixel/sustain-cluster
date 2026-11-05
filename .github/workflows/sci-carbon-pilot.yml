@@ -355,3 +355,52 @@ jobs:
           name: sci-carbon-calendar-transfer-october
           path: research_sci/results/calendar_transfer_october.*
           if-no-files-found: warn
+
+ 
+  projected-guard-november:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: |
+          unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: New November workload transfer for strict and buffered projected SLA guards
+        run: |
+          python -m research_sci.projected_guard_transfer --month 11 --day 1 --seeds 1 42 --capacity-scales 0.02 0.1 --test-start-ticks 288 448 --output research_sci/results/projected_guard_november.json
+      - name: Upload November guarded routing comparisons
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sci-carbon-projected-guard-november
+          path: research_sci/results/projected_guard_november.*
+          if-no-files-found: warn
+
+  projected-guard-december:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: |
+          unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: New December workload transfer with unchanged fixed projected SLA guards
+        run: |
+          python -m research_sci.projected_guard_transfer --month 12 --day 1 --seeds 1 42 --capacity-scales 0.02 0.1 --test-start-ticks 288 448 --output research_sci/results/projected_guard_december.json
+      - name: Upload December guarded routing comparisons
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sci-carbon-projected-guard-december
+          path: research_sci/results/projected_guard_december.*
+          if-no-files-found: warn
