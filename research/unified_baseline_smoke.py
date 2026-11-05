@@ -29,7 +29,7 @@ from research.queue_prediction_audit import audit_forecasts
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
-from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit
+from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareCongestionAdaptive
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -47,6 +47,7 @@ POLICIES = {
     "nsga2_surrogate": NSGA2BatchPolicy,
     "queue_nsga2": QueueAwareFull,
     "queue_nsga2_with_transit": QueueAwareWithTransit,
+    "queue_nsga2_adaptive_transit": QueueAwareCongestionAdaptive,
     "queue_nsga2_carbon_guard": QueueAwareCarbonGuard,
     "queue_nsga2_carbon_sla_guard": QueueAwareCarbonSlaGuard,
     "queue_nsga2_no_queue": QueueAblationNoQueue,
@@ -256,6 +257,11 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         summary["carbon_guard_interventions"] = getattr(policy, "carbon_guard_interventions", 0)
         summary["carbon_guard_vetoes"] = getattr(policy, "carbon_guard_vetoes", 0)
         summary["carbon_guard_extra_fitness_calls"] = getattr(policy, "carbon_guard_extra_fitness_calls", 0)
+        summary["adaptive_projection_checks"] = getattr(policy, "adaptive_projection_checks", 0)
+        summary["adaptive_transit_projections"] = getattr(policy, "adaptive_transit_projections", 0)
+        summary["adaptive_base_projections"] = getattr(policy, "adaptive_base_projections", 0)
+        if summary["adaptive_projection_checks"]:
+            assert summary["adaptive_projection_checks"] == (summary["adaptive_transit_projections"] + summary["adaptive_base_projections"])
         summary["tasks_seen"] = len(seen)
         summary["tasks_dispatched"] = len(dispatched)
         summary["in_transit_last"] = len(env.in_transit_tasks)
