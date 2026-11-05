@@ -45,7 +45,7 @@ def summarize(results):
     for policy, runs in groups.items():
         metrics = {}
         for metric in METRICS:
-            values = [float(r[metric]) for r in runs if r[metric] is not None]
+            values = [float(r[metric]) for r in runs if r.get(metric) is not None]
             if not values:
                 metrics[metric] = {"mean": None, "std": None, "min": None, "max": None}
                 continue
