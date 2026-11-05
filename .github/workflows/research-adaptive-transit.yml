@@ -7,6 +7,9 @@ on:
       - "research/queue_aware_nsga2.py"
       - "research/unified_baseline_smoke.py"
       - "research/tests/test_congestion_adaptive_transit.py"
+      - "research/adaptive_overhead_audit.py"
+      - "research/planner_overhead_audit.py"
+      - "research/tests/test_adaptive_overhead_audit.py"
       - ".github/workflows/research-adaptive-transit.yml"
   workflow_dispatch:
 
@@ -38,6 +41,7 @@ jobs:
           mkdir -p research/results
           python -m unittest discover -s research/tests -p 'test_congestion_adaptive_transit.py' -v 2>&1 | tee research/results/adaptive_tests.log
           python -m unittest discover -s research/tests -p 'test_transit_queue_projection.py' -v 2>&1 | tee research/results/adaptive_existing_tests.log
+          python -m unittest discover -s research/tests -p 'test_adaptive_overhead_audit.py' -v 2>&1 | tee research/results/adaptive_overhead_tests.log
       - name: Run paired full simulations on EXPLORATORY dates
         run: |
           set -o pipefail
@@ -92,6 +96,13 @@ jobs:
           Path(stem+"_paired.json").write_text(
               json.dumps({"versus_queue":paired,"versus_transit":other},indent=2)+"\n")
           PY
+      - name: Audit matched adaptive planner overhead versus actual SLA and carbon
+        run: |
+          set -o pipefail
+          python -m research.adaptive_overhead_audit \
+            --input "research/results/adaptive_${{ matrix.scenario.name }}.json" \
+            --output "research/results/adaptive_${{ matrix.scenario.name }}_overhead_audit.json" \
+            2>&1 | tee "research/results/adaptive_${{ matrix.scenario.name }}_overhead_audit.log"
       - name: Archive all simulated results, failed tests and raw tasks
         if: always()
         uses: actions/upload-artifact@v4
