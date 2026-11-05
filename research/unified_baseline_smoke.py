@@ -219,8 +219,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
                 planner_dispatch_max_seconds = max(
                     planner_dispatch_max_seconds, decision_seconds
                 )
-            summary["probe_intervention"] = probe_meta
-        summary["fallback_assignments"] += fallbacks
+            summary["fallback_assignments"] += fallbacks
             dc_order = list(env.cluster_manager.datacenters.values())
             for task, action in zip(tasks, acts):
                 if dc_order[action - 1].dc_id == task.origin_dc_id:
@@ -292,6 +291,7 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         if completed_records is not None:
             for row in task_rows:
                 completed_records.append({"policy": policy_name, "seed": seed, **row})
+        summary["probe_intervention"] = probe_meta
         summary.update(summarize_dispatch_latency(
             planner_batch_seconds, planner_batch_sizes
         ))
