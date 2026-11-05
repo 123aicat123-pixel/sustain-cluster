@@ -183,10 +183,18 @@ def nsga2_optimize(choices, evaluate, *, population_size=16,
 
     final_scores = [fitness(row) for row in population]
     selected, front_size = _knee(population, final_scores, weights)
+    # Export only the cached, already-scored final Pareto front. No new
+    # objective evaluations, random draws or search-budget changes.
+    front_indices = non_dominated_sort(final_scores)[0]
+    front_records = [
+        {"chromosome": list(population[i]), "surrogate": list(final_scores[i])}
+        for i in front_indices
+    ]
     return list(population[selected]), {
         "population": population_size, "generations": generations,
         "surrogate_evaluations": len(cache),
         "evaluation_requests": requests,
         "pareto_front_size": front_size,
         "selected_surrogate": list(final_scores[selected]),
+        "final_front_records": front_records,
     }
