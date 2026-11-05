@@ -1,6 +1,7 @@
 """No-simulator contracts for 4-way locked guard transfer accounting."""
 import unittest
 from research_sci.projected_guard_transfer import evaluate_group,METHODS,transfer
+from research_sci.chronological_eval import research_calendar_climate_day
 
 
 def example(name):
@@ -66,6 +67,13 @@ class GuardTransferTests(unittest.TestCase):
         rows=[example(name) for name in METHODS]
         rows[1]["pretest_train_completed"]=1
         with self.assertRaises(AssertionError):evaluate_group(rows)
+
+    def test_november_december_weather_index_is_in_real_year(self):
+        self.assertEqual(research_calendar_climate_day(2023,11,1),304)
+        self.assertEqual(research_calendar_climate_day(2023,12,1),334)
+        self.assertLess(334+7+7,365)
+        # Leap-year day-of-year is handled correctly.
+        self.assertEqual(research_calendar_climate_day(2020,12,1),335)
 
     def test_no_retesting_used_september_october(self):
         with self.assertRaises(ValueError):
