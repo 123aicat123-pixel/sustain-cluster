@@ -307,6 +307,12 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         summary["carbon_guard_extra_fitness_calls"] = getattr(policy, "carbon_guard_extra_fitness_calls", 0)
         summary["front_carbon_selection_checks"] = getattr(policy, "front_carbon_selection_checks", 0)
         summary["front_carbon_selection_changes"] = getattr(policy, "front_carbon_selection_changes", 0)
+        summary["planner_projection_calls"] = getattr(policy, "planner_projection_calls", 0)
+        summary["planner_projection_seconds"] = getattr(policy, "planner_projection_seconds", 0.0)
+        summary["adaptive_gate_seconds"] = getattr(policy, "adaptive_gate_seconds", 0.0)
+        if summary["planner_projection_calls"]:
+            assert summary["planner_projection_seconds"] >= 0
+            assert summary["adaptive_gate_seconds"] >= 0
         summary["adaptive_projection_checks"] = getattr(policy, "adaptive_projection_checks", 0)
         summary["adaptive_transit_projections"] = getattr(policy, "adaptive_transit_projections", 0)
         summary["adaptive_base_projections"] = getattr(policy, "adaptive_base_projections", 0)
