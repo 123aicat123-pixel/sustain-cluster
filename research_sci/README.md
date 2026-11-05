@@ -413,3 +413,47 @@ from being blamed for deadline violations that were structurally
 unavoidable **at dispatch**. It does not prove whether an earlier
 dispatch decision could have saved the job, and it does not model
 network-latency lower bounds.
+
+
+## All-datacenter dispatch-time candidate feasibility audit
+
+A new **read-only** experiment audits the full data center action set at
+the exact moment a job is routed. `action_feasibility_audit.py` uses
+the same 15-minute FIFO queue predictor, observed task/network delay,
+current grid intensity, running/pending queues, in-transit tasks and
+earlier same-batch commitments as the actual routing policy. The
+target job is **not yet committed** when alternative centers are
+evaluated, preventing a double-counting reservation.
+
+The audit distinguishes:
+
+- **No forecastable candidate:** Every center's bounded queue forecast
+  returns no finish time; this is NOT automatically a proof that the
+  job cannot meet its deadline.
+- **No forecasted feasible candidate:** No center is *estimated*
+  to finish by the deadline (unbuffered and buffered counts separately).
+- **Selected route predicted late despite a feasible alternative:**
+  The selected center is estimated late, but at least one other
+  center is estimated on time. This is a predicted opportunity,
+  **NOT a demonstrated avoidable SLA violation**.
+- **Buffered feasibility and intensity choice:** Exposes whether
+  the chosen route minimizes *observed grid carbon intensity* among
+  estimated SLA-feasible centers. It does not claim marginal per-task
+  carbon reductions or predict future carbon.
+
+The true completion and SLA label is joined **after** the simulator
+horizon and unfinished jobs remain censored. Per-job JSONL includes
+candidate completion predictions and the later actual outcome, with
+aggregate counts audited against the simulator's real completion
+and SLA accounting.
+
+```bash
+python -m research_sci.action_feasibility_study --seeds 1 42 \
+  --capacity-scales 0.02 0.1 --test-start-ticks 288 448 \
+  --output research_sci/results/action_feasibility_study.json
+```
+
+This is an **observational one-job-at-a-time counterfactual** with
+fixed past commitments. Rerouting one job would alter future
+queues/arrivals and must be simulated in a separate matched policy
+experiment before an SLA rescue or carbon improvement can be claimed.
