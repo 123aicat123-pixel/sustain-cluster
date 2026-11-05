@@ -29,6 +29,11 @@ METRICS = (
     "task_audit_sla_violation_rate", "task_audit_response_mean_minutes",
     "task_audit_response_p95_minutes", "task_audit_wait_p95_minutes",
     "task_audit_total_tardiness_minutes",
+    "planner_dispatch_calls", "planner_dispatched_tasks",
+    "planner_dispatch_seconds", "planner_dispatch_mean_ms",
+    "planner_dispatch_p50_ms", "planner_dispatch_p95_ms",
+    "planner_dispatch_max_ms", "planner_dispatch_ms_per_task",
+    "nsga2_surrogate_evaluations", "nsga2_evaluation_requests",
 )
 
 
