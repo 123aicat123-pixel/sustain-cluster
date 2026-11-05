@@ -17,7 +17,7 @@ import json
 import math
 import random
 import tempfile
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 
 from research_sci.online_calibration import OnlineResidualCalibrator
@@ -27,6 +27,7 @@ from research_sci.state_risk_audit import snapshot_decision, audit_state_risk
 from research_sci.action_feasibility_audit import evaluate_candidates, summarize_candidate_audit
 from research_sci.queue_discipline import VALID_QUEUE_ORDERS, install_queue_discipline
 from research_sci.joint_batch import JointBatchCarbonPlanner
+from research_sci.state_gate import FeasibleCoverageGate
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/env/sim_config.yaml"
@@ -91,7 +92,8 @@ def finished_work_signature(tasks):
     return _signature(records)
 
 
-def _create_env(seed, total_steps, capacity_scale, scratch, sim_duration_days=None):
+def _create_env(seed, total_steps, capacity_scale, scratch,
+                sim_duration_days=None, calendar_month=None, calendar_day=None):
     # Defer simulator and ML dependency imports: lightweight contract tests
     # run on GitHub Actions without installing 3rd-party packages.
     import numpy as np
@@ -110,6 +112,17 @@ def _create_env(seed, total_steps, capacity_scale, scratch, sim_duration_days=No
     np.random.seed(seed)
     config = copy.deepcopy(yaml.safe_load(CONFIG.read_text(encoding="utf-8")))
     sim = config["simulation"]
+    if (calendar_month is None) != (calendar_day is None):
+        raise ValueError("Calendar month and day must be provided together")
+    if calendar_month is not None:
+        if (type(calendar_month) is not int or type(calendar_day) is not int):
+            raise ValueError("Calendar month and day must be integer")
+        # Validate the real calendar before loading the corresponding 2020
+        # Alibaba workload and year-2023 environmental time sequence.
+        date(int(sim["year"]), calendar_month, calendar_day)
+        date(2020, calendar_month, calendar_day)
+        sim["month"] = calendar_month
+        sim["init_day"] = calendar_day
     sim.update({
         "strategy": "manual_rl",
         "single_action_mode": False,
@@ -142,7 +155,8 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             audit_states=False, state_audit_dir=None,
             audit_candidates=False, candidate_audit_dir=None,
             heldout_queue_order="fifo", heldout_forecast_order=None,
-            heldout_batch_planner="greedy"):
+            heldout_batch_planner="greedy",
+            calendar_month=None, calendar_day=None):
     if treatment not in TREATMENTS:
         raise ValueError(f"Unknown treatment {treatment}")
     if heldout_queue_order not in VALID_QUEUE_ORDERS:
@@ -151,9 +165,9 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
         heldout_forecast_order = heldout_queue_order
     if heldout_forecast_order not in VALID_QUEUE_ORDERS:
         raise ValueError("Unsupported forecast queue discipline")
-    if heldout_batch_planner not in ("greedy","beam4"):
+    if heldout_batch_planner not in ("greedy","beam4","gate50"):
         raise ValueError("Unsupported heldout batch planner")
-    if heldout_batch_planner == "beam4" and (
+    if heldout_batch_planner in ("beam4","gate50") and (
         heldout_queue_order != "fifo" or heldout_forecast_order != "fifo"
     ):
         raise ValueError("Joint batch baseline requires matched FIFO execution/forecast")
@@ -167,7 +181,8 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
 
     with tempfile.TemporaryDirectory(prefix="sci_chronological_") as tmp:
         env = _create_env(seed, total_steps, capacity_scale, Path(tmp),
-                          sim_duration_days=sim_duration_days)
+                          sim_duration_days=sim_duration_days,
+                          calendar_month=calendar_month,calendar_day=calendar_day)
         try:
             dt = env.time_step
             t0 = env.start_time
@@ -203,14 +218,20 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             heldout_decision_buffers = {}
             heldout_routes = []
             joint_planner = None
+            state_gate = None
             metrics = {
                 "seed": seed, "treatment": treatment,
+                "calendar_month": t0.month, "calendar_day": t0.day,
                 "queue_discipline": heldout_queue_order,
                 "forecast_queue_discipline": heldout_forecast_order,
                 "batch_planner": heldout_batch_planner,
                 "test_joint_batch_plans": 0,
                 "test_joint_beam_expansions": 0,
                 "test_joint_chunks": 0,
+                "test_gate_batches": 0,
+                "test_gate_activated_batches": 0,
+                "test_gate_tasks": 0,
+                "test_gate_feasible_tasks": 0,
                 "capacity_scale": capacity_scale,
                 "calibration_steps": calibration_steps, "gap_steps": gap_steps,
                 "test_steps": test_steps, "drain_steps": drain_steps,
@@ -263,10 +284,14 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                         "queue_risk_carbon", risk_buffer_minutes=frozen_margin,
                         queue_order=heldout_forecast_order
                     )
-                    if heldout_batch_planner == "beam4":
+                    if heldout_batch_planner in ("beam4","gate50"):
                         joint_planner = JointBatchCarbonPlanner(
                             risk_buffer_minutes=frozen_margin,
                             beam_width=4, chunk_size=8
+                        )
+                    if heldout_batch_planner == "gate50":
+                        state_gate = FeasibleCoverageGate(
+                            threshold=0.5,min_batch_size=2
                         )
                     if heldout_queue_order != "fifo":
                         install_queue_discipline(
@@ -285,7 +310,20 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                     raise AssertionError("Unexpected newly admitted tasks during drain")
                 joint_routes = {}
                 joint_predicted = {}
-                if phase == "heldout" and joint_planner is not None and tasks:
+                use_joint = phase == "heldout" and joint_planner is not None and bool(tasks)
+                if use_joint and state_gate is not None:
+                    gate_decision = state_gate.assess(
+                        tasks,env.cluster_manager.datacenters,
+                        now,env.cluster_manager,in_transit,
+                        step_seconds=int(dt.total_seconds())
+                    )
+                    metrics["test_gate_batches"]+=1
+                    metrics["test_gate_tasks"]+=gate_decision["tasks"]
+                    metrics["test_gate_feasible_tasks"]+=gate_decision["feasible_tasks"]
+                    if gate_decision["activate"]:
+                        metrics["test_gate_activated_batches"]+=1
+                    use_joint = gate_decision["activate"]
+                if use_joint:
                     batch_result = joint_planner.plan(
                         tasks, env.cluster_manager.datacenters,
                         now, env.cluster_manager, in_transit,
@@ -300,7 +338,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                     metrics["test_joint_chunks"] += batch_result["chunks"]
                 actions = []
                 for task in tasks:
-                    if phase == "heldout" and joint_planner is not None:
+                    if phase == "heldout" and task in joint_routes:
                         dc_id = joint_routes[task]
                         fallback = False
                     else:
@@ -338,7 +376,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                                          if phase == "heldout" else "fifo"),
                         )
                         eta = max(now + dt, now + timedelta(seconds=delay))
-                    if phase == "heldout" and joint_planner is not None:
+                    if phase == "heldout" and task in joint_routes:
                         if prediction != joint_predicted[task]:
                             raise AssertionError(
                                 "Batch planner forecast disagrees with actual "

@@ -307,3 +307,51 @@ jobs:
           name: sci-carbon-joint-batch
           path: research_sci/results/joint_batch_study*
           if-no-files-found: warn
+
+  calendar-transfer-september:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: |
+          unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: September independent calendar transfer with gate threshold frozen at 50 percent
+        run: |
+          python -m research_sci.calendar_transfer --month 9 --day 1 --seeds 1 42 --capacity-scales 0.02 0.1 --test-start-ticks 288 448 --output research_sci/results/calendar_transfer_september.json
+      - name: Archive September transfer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sci-carbon-calendar-transfer-september
+          path: research_sci/results/calendar_transfer_september.*
+          if-no-files-found: warn
+
+  calendar-transfer-october:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: |
+          unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: October independent calendar transfer using identical pre-frozen policies
+        run: |
+          python -m research_sci.calendar_transfer --month 10 --day 1 --seeds 1 42 --capacity-scales 0.02 0.1 --test-start-ticks 288 448 --output research_sci/results/calendar_transfer_october.json
+      - name: Archive October transfer evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sci-carbon-calendar-transfer-october
+          path: research_sci/results/calendar_transfer_october.*
+          if-no-files-found: warn

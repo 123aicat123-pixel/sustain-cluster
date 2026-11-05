@@ -573,3 +573,53 @@ interaction effects from later tasks and later exogenous arrivals.
 The algorithm is a research heuristic baseline, not a novel RL
 method or SCI result by itself. Any comparative improvement requires
 independent broader workload validation.
+
+## New calendar workload transfer: September and October, pre-locked gate50
+
+Prior work repeatedly inspected and measured August 2023 simulator
+windows, mapping to the August 2020 Alibaba workload via the upstream
+year-substitution code. It would be scientifically invalid to choose
+an adaptive congestion threshold on August results and then describe
+more August windows as untouched out-of-sample evidence.
+
+Here we **predeclare and freeze** three treatments (same FIFO
+queue/forecast and 30-minute risk buffer):
+
+1. `greedy`: original task-by-task queue-risk/carbon scheduler.
+2. `beam4`: bounded four-state, eight-task-chunk joint lookahead.
+3. `gate50`: activate EXACTLY the same beam4 if at least 2 jobs
+   are visible and at least **50%** of those jobs have any optimistic,
+   unbuffered forecast-feasible datacenter. Otherwise use unmodified
+   per-task greedy. All gate features are visible before env.step;
+   the task currently being evaluated is not a prior commitment.
+   This threshold was formulated after the exploratory August
+   capacity results and is not claimed as learned or optimal.
+
+September **2023-09-01** and October **2023-10-01** are wholly
+different *calendar workload slices* (mapped to the same-day 2020
+Alibaba trace) and different 2023 environmental time slices.
+Every arm still gets a 16-tick historical training prefix and the
+same two later, non-overlapping admission windows at tick 288
+and tick 448. Each heldout cohort is a separate controlled
+simulator replay and intentionally omits intervening admissions.
+Independent workload slices are not independent datasets.
+
+```bash
+python -m research_sci.calendar_transfer --month 9 --day 1 \
+  --seeds 1 42 --capacity-scales 0.02 0.1 \
+  --test-start-ticks 288 448 \
+  --output research_sci/results/calendar_transfer_september.json
+python -m research_sci.calendar_transfer --month 10 --day 1 \
+  --seeds 1 42 --capacity-scales 0.02 0.1 \
+  --test-start-ticks 288 448 \
+  --output research_sci/results/calendar_transfer_october.json
+```
+
+Original per-task action mapping, arrival-seed pair matching,
+full-task identity completion checks and actual facility+network
+CO2 measurement remain unchanged. Per-policy actual SLA failure
+includes overdue unfinished tasks; changed completed task sets
+produce `null` comparative CO2 percentage. **Do not select or
+retune the gate threshold, beam width or carbon/SLA scalarization
+using these evaluation months** and then call them untouched tests.
+No formal safety coverage or SCI significance is implied.
