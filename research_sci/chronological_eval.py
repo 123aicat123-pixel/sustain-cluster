@@ -28,6 +28,7 @@ from research_sci.action_feasibility_audit import evaluate_candidates, summarize
 from research_sci.queue_discipline import VALID_QUEUE_ORDERS, install_queue_discipline
 from research_sci.joint_batch import JointBatchCarbonPlanner
 from research_sci.state_gate import FeasibleCoverageGate
+from research_sci.projected_risk_guard import ProjectedRiskGuard
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/env/sim_config.yaml"
@@ -172,9 +173,9 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             "predeclared fixed_30 policy; calibration-dependent policies "
             "must retain their training arrivals"
         )
-    if heldout_batch_planner not in ("greedy","beam4","gate50"):
+    if heldout_batch_planner not in ("greedy","beam4","gate50","guard0","guard15"):
         raise ValueError("Unsupported heldout batch planner")
-    if heldout_batch_planner in ("beam4","gate50") and (
+    if heldout_batch_planner in ("beam4","gate50","guard0","guard15") and (
         heldout_queue_order != "fifo" or heldout_forecast_order != "fifo"
     ):
         raise ValueError("Joint batch baseline requires matched FIFO execution/forecast")
@@ -227,6 +228,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
             heldout_routes = []
             joint_planner = None
             state_gate = None
+            risk_guard = None
             metrics = {
                 "seed": seed, "treatment": treatment,
                 "calendar_month": t0.month, "calendar_day": t0.day,
@@ -241,6 +243,12 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                 "test_gate_activated_batches": 0,
                 "test_gate_tasks": 0,
                 "test_gate_feasible_tasks": 0,
+                "test_guard_reviewed_batches": 0,
+                "test_guard_accepted_batches": 0,
+                "test_guard_rejected_risk": 0,
+                "test_guard_rejected_no_gain": 0,
+                "test_guard_rejected_forced": 0,
+                "test_guard_projected_carbon_delta_accepted": 0.0,
                 "capacity_scale": capacity_scale,
                 "calibration_steps": calibration_steps, "gap_steps": gap_steps,
                 "test_steps": test_steps, "drain_steps": drain_steps,
@@ -299,7 +307,7 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                         "queue_risk_carbon", risk_buffer_minutes=frozen_margin,
                         queue_order=heldout_forecast_order
                     )
-                    if heldout_batch_planner in ("beam4","gate50"):
+                    if heldout_batch_planner in ("beam4","gate50","guard0","guard15"):
                         joint_planner = JointBatchCarbonPlanner(
                             risk_buffer_minutes=frozen_margin,
                             beam_width=4, chunk_size=8
@@ -307,6 +315,10 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                     if heldout_batch_planner == "gate50":
                         state_gate = FeasibleCoverageGate(
                             threshold=0.5,min_batch_size=2
+                        )
+                    if heldout_batch_planner in ("guard0","guard15"):
+                        risk_guard=ProjectedRiskGuard(
+                            heldout_batch_planner,risk_buffer_minutes=frozen_margin
                         )
                     if heldout_queue_order != "fifo":
                         install_queue_discipline(
@@ -344,13 +356,38 @@ def run_one(seed, treatment, calibration_steps=16, gap_steps=128,
                         now, env.cluster_manager, in_transit,
                         step_seconds=int(dt.total_seconds())
                     )
-                    joint_routes = dict(zip(tasks,batch_result["routes"]))
-                    joint_predicted = dict(zip(tasks,batch_result["predictions"]))
-                    if len(joint_routes) != len(tasks):
-                        raise AssertionError("Joint planner duplicated batch tasks")
-                    metrics["test_joint_batch_plans"] += 1
-                    metrics["test_joint_beam_expansions"] += batch_result["expansions"]
-                    metrics["test_joint_chunks"] += batch_result["chunks"]
+                    if risk_guard is not None:
+                        review=risk_guard.review(
+                            tasks,env.cluster_manager.datacenters,
+                            now,env.cluster_manager,in_transit,
+                            batch_result,step_seconds=int(dt.total_seconds())
+                        )
+                        metrics["test_guard_reviewed_batches"]+=1
+                        metrics["test_guard_accepted_batches"]+=int(review["accepted"])
+                        if review["accepted"]:
+                            metrics["test_guard_projected_carbon_delta_accepted"]+=(
+                                review["projected_carbon_proxy_delta"]
+                            )
+                        else:
+                            reason=review["reason"]
+                            metric={
+                                "forecast_sla_regression":"test_guard_rejected_risk",
+                                "no_strict_projected_gain":"test_guard_rejected_no_gain",
+                                "empty_or_forced_origin":"test_guard_rejected_forced"
+                            }[reason]
+                            metrics[metric]+=1
+                            # Entire batch returns to the actual sequential
+                            # greedy dispatcher, not a partially accepted plan.
+                            use_joint=False
+                    if use_joint:
+                        joint_routes = dict(zip(tasks,batch_result["routes"]))
+                        joint_predicted = dict(zip(tasks,batch_result["predictions"]))
+                    if use_joint:
+                        if len(joint_routes) != len(tasks):
+                            raise AssertionError("Joint planner duplicated batch tasks")
+                        metrics["test_joint_batch_plans"] += 1
+                        metrics["test_joint_beam_expansions"] += batch_result["expansions"]
+                        metrics["test_joint_chunks"] += batch_result["chunks"]
                 actions = []
                 for task in tasks:
                     if phase == "heldout" and task in joint_routes:
