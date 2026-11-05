@@ -30,7 +30,7 @@ from research.queue_prediction_audit import audit_forecasts
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
-from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk
+from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk, QueueAwareFrontCarbonTaskwise
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -50,6 +50,7 @@ POLICIES = {
     "queue_nsga2_with_transit": QueueAwareWithTransit,
     "queue_nsga2_adaptive_transit": QueueAwareCongestionAdaptive,
     "queue_nsga2_front_carbon_risk": QueueAwareFrontCarbonRisk,
+    "queue_nsga2_front_carbon_taskwise": QueueAwareFrontCarbonTaskwise,
     "queue_nsga2_carbon_guard": QueueAwareCarbonGuard,
     "queue_nsga2_carbon_sla_guard": QueueAwareCarbonSlaGuard,
     "queue_nsga2_no_queue": QueueAblationNoQueue,
