@@ -7,6 +7,8 @@ on:
       - ".github/workflows/research-indexed-counterbalanced.yml"
       - "research/indexed_order_audit.py"
       - "research/tests/test_indexed_order_audit.py"
+      - "research/indexed_counterbalanced_summary.py"
+      - "research/tests/test_indexed_counterbalanced_summary.py"
   workflow_dispatch:
 
 permissions:
@@ -36,6 +38,7 @@ jobs:
           set -o pipefail
           mkdir -p research/results
           python -m unittest discover -s research/tests -p 'test_indexed_order_audit.py' -v 2>&1 | tee research/results/counterbalanced_unit.log
+          python -m unittest discover -s research/tests -p 'test_indexed_counterbalanced_summary.py' -v 2>&1 | tee research/results/counterbalanced_summary_unit.log
       - name: Forward order Legacy then Indexed
         run: |
           set -o pipefail
@@ -63,6 +66,13 @@ jobs:
             --prefix research/results/counterbalanced_${{ matrix.scenario.name }} \
             --output research/results/counterbalanced_${{ matrix.scenario.name }}_audit.json \
             2>&1 | tee research/results/counterbalanced_${{ matrix.scenario.name }}_audit.log
+      - name: Preserve both execution orders and signed deltas in a scenario summary
+        run: |
+          set -o pipefail
+          python -m research.indexed_counterbalanced_summary \
+            --inputs research/results/counterbalanced_${{ matrix.scenario.name }}_audit.json \
+            --output research/results/counterbalanced_${{ matrix.scenario.name }}_summary.json \
+            2>&1 | tee research/results/counterbalanced_${{ matrix.scenario.name }}_summary.log
       - name: Archive raw results even on failure
         if: always()
         uses: actions/upload-artifact@v4
