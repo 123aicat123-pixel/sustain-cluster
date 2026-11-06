@@ -46,8 +46,10 @@ class IndexedOrderAuditTests(unittest.TestCase):
 
     def test_equal_across_orders_with_signed_timing(self):
         self.results["forward"][1]["planner_dispatch_p95_ms"] = 9
+        self.results["forward"][1]["planner_dispatch_p50_ms"] = 9
         self.results["forward"][1]["planner_dispatch_max_ms"] = 10
         self.results["reverse"][0]["planner_dispatch_p95_ms"] = 9
+        self.results["reverse"][0]["planner_dispatch_p50_ms"] = 9
         out = audit_counterbalanced(self.results, self.tasks)
         self.assertTrue(out[0]["exact_task_level_equality"])
         self.assertEqual(out[0]["orders"]["forward"]["p95_delta_ms"], -1)
