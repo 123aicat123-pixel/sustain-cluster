@@ -34,7 +34,7 @@ from research.queue_prediction_audit import audit_forecasts
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
-from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareIndexedTransit, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk, QueueAwareFrontCarbonTaskwise
+from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareIndexedTransit, QueueAwareLaggedPUE, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk, QueueAwareFrontCarbonTaskwise
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -56,6 +56,7 @@ POLICIES = {
     "queue_nsga2": QueueAwareFull,
     "queue_nsga2_with_transit": QueueAwareWithTransit,
     "queue_nsga2_indexed_transit": QueueAwareIndexedTransit,
+    "queue_nsga2_lagged_pue": QueueAwareLaggedPUE,
     "queue_nsga2_adaptive_transit": QueueAwareCongestionAdaptive,
     "queue_nsga2_front_carbon_risk": QueueAwareFrontCarbonRisk,
     "queue_nsga2_front_carbon_taskwise": QueueAwareFrontCarbonTaskwise,
@@ -229,6 +230,12 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
                     summary["remote_dispatches"] += 1
             dispatched.update(tasks)
             _, _, terminated, truncated, info = env.step(acts)
+            # Post-step outputs are NOT available to the decision that just ran.
+            # This observation can only influence the NEXT loop iteration.
+            if hasattr(policy, "observe_facility_after_step"):
+                policy.observe_facility_after_step(
+                    info["datacenter_infos"], env.cluster_manager.datacenters
+                )
             summary["steps_completed"] += 1
             pending = 0
             for dc_name, dc_info in info["datacenter_infos"].items():
@@ -314,6 +321,10 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         if summary["planner_projection_calls"]:
             assert summary["planner_projection_seconds"] >= 0
             assert summary["adaptive_gate_seconds"] >= 0
+        summary["lagged_pue_observation_steps"] = getattr(policy, "lagged_pue_observation_steps", 0)
+        summary["lagged_pue_missing_site_readings"] = getattr(policy, "lagged_pue_missing_site_readings", 0)
+        summary["lagged_pue_nonunit_site_readings"] = getattr(policy, "lagged_pue_nonunit_site_readings", 0)
+        summary["lagged_pue_max"] = getattr(policy, "lagged_pue_max", 1.0)
         summary["adaptive_projection_checks"] = getattr(policy, "adaptive_projection_checks", 0)
         summary["adaptive_transit_projections"] = getattr(policy, "adaptive_transit_projections", 0)
         summary["adaptive_base_projections"] = getattr(policy, "adaptive_base_projections", 0)
