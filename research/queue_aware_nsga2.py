@@ -193,6 +193,10 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
         self.predicted_start_by_task = {}
         self.prediction_audit_calls = 0
 
+    def _facility_carbon_factor(self, dc_id):
+        # All legacy policies retain the exact original carbon surrogate.
+        return 1.0
+
     def _project_starts(self, dc, arrivals, now):
         return predict_starts(dc, arrivals, now)
 
@@ -271,7 +275,7 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
                            (price, ci, origin_ci, transfer_cost, transfer_carbon)):
                     raise ValueError("nonfinite observed prices/carbon")
                 cost = e_kwh * price / 1000
-                carbon = e_kwh * ci / 1000
+                carbon = e_kwh * ci / 1000 * self._facility_carbon_factor(dc_id)
                 if self.transfer_accounting:
                     cost += transfer_cost
                     carbon += transfer_carbon
@@ -420,6 +424,36 @@ class QueueAwareIndexedTransit(QueueAwareWithTransit):
     """Ablate only per-start dict rebuild; preserve search and FIFO semantics."""
 
     indexed_membership = True
+
+
+class QueueAwareLaggedPUE(QueueAwareIndexedTransit):
+    """Past-step site-average PUE adjusts only the existing carbon proxy.
+
+    No newly observed post-step data is accessible before its next dispatch.
+    This is not a learned action-conditional marginal-emissions model.
+    """
+
+    def reset(self):
+        super().reset()
+        self._lagged_pue = {}
+        self.lagged_pue_observation_steps = 0
+        self.lagged_pue_missing_site_readings = 0
+        self.lagged_pue_nonunit_site_readings = 0
+        self.lagged_pue_max = 1.0
+
+    def observe_facility_after_step(self, info_by_name, datacenters):
+        from research.lagged_pue_proxy import observed_facility_multipliers
+        values, fallbacks = observed_facility_multipliers(
+            info_by_name, datacenters
+        )
+        self._lagged_pue = values
+        self.lagged_pue_observation_steps += 1
+        self.lagged_pue_missing_site_readings += fallbacks
+        self.lagged_pue_nonunit_site_readings += sum(v > 1 for v in values.values())
+        self.lagged_pue_max = max(self.lagged_pue_max, *values.values())
+
+    def _facility_carbon_factor(self, dc_id):
+        return self._lagged_pue.get(dc_id, 1.0)
 
 
 def relevant_transit_competition(dc, arrivals, now, pending_transit):
