@@ -1,0 +1,106 @@
+name: Research lagged facility-PUE carbon proxy ablation
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-lagged-pue.yml"
+      - "research/lagged_pue_proxy.py"
+      - "research/queue_aware_nsga2.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/tests/test_lagged_pue_proxy.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lagged-pue-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - {name: june15_05, month: 6, day: 15, scale: "0.05"}
+          - {name: may19_05, month: 5, day: 19, scale: "0.05"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator requirements
+        run: python -m pip install -r requirements.txt
+      - name: Unpack workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Validate lagged PUE policy and score isolation
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_lagged_pue_proxy.py' -v 2>&1 | tee research/results/lagged_pue_unit.log
+      - name: Full simulator with paired independent tasks
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --start-month ${{ matrix.scenario.month }} --start-day ${{ matrix.scenario.day }} \
+            --cpu-capacity-scale ${{ matrix.scenario.scale }} \
+            --seeds 901 1701 \
+            --policies queue_nsga2_indexed_transit queue_nsga2_lagged_pue sla_feasible_carbon \
+            --output-prefix research/results/lagged_pue_${{ matrix.scenario.name }} \
+            2>&1 | tee research/results/lagged_pue_${{ matrix.scenario.name }}.log
+      - name: Audit completion, equal task identities and actual carbon/SLA deltas
+        run: |
+          set -o pipefail
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+          from research.planner_overhead_audit import audit_planner_rows
+          from research.paired_task_analysis import compare_task_rows
+          stem="research/results/lagged_pue_${{ matrix.scenario.name }}"
+          data=json.loads(Path(stem+".json").read_text())
+          with open(stem+"_completed_tasks.csv",newline="") as fp:
+              rows=list(csv.DictReader(fp))
+          report=[]
+          for seed in (901,1701):
+              group=[x for x in data if x["seed"]==seed]
+              assert len(group)==3
+              assert len({x["policy"] for x in group})==3
+              audit_planner_rows(group)
+              base=next(x for x in group if x["policy"]=="queue_nsga2_indexed_transit")
+              trial=next(x for x in group if x["policy"]=="queue_nsga2_lagged_pue")
+              pair=compare_task_rows(
+                  [x for x in rows if int(x["seed"])==seed],
+                  reference="queue_nsga2_indexed_transit")
+              assert len(pair)==2
+              treatment=next(x for x in pair if x["policy"]=="queue_nsga2_lagged_pue")
+              assert int(trial["lagged_pue_observation_steps"])==int(trial["steps_completed"])
+              assert int(trial["lagged_pue_nonunit_site_readings"])>=0
+              assert 1.0<=float(trial["lagged_pue_max"])<=3.0
+              assert base["nsga2_evaluation_requests"]==trial["nsga2_evaluation_requests"]
+              item={
+                  "seed":seed,"tasks":int(trial["tasks_dispatched"]),
+                  "nonunit_pue_observations":int(trial["lagged_pue_nonunit_site_readings"]),
+                  "missing_pue_readings":int(trial["lagged_pue_missing_site_readings"]),
+                  "max_observed_pue":trial["lagged_pue_max"],
+                  "sla_delta":int(trial["sla_violated"])-int(base["sla_violated"]),
+                  "carbon_kg_delta":trial["reported_total_carbon_kg"]-base["reported_total_carbon_kg"],
+                  "cost_usd_delta":trial["reported_total_cost_usd"]-base["reported_total_cost_usd"],
+                  "p95_ms_delta":trial["planner_dispatch_p95_ms"]-base["planner_dispatch_p95_ms"],
+                  "destination_changes":treatment["destination_changes"],
+                  "sla_harmed":treatment["sla_harmed"],
+                  "sla_rescued":treatment["sla_rescued"],
+                  "censored":False
+              }
+              report.append(item)
+              print(json.dumps(item,sort_keys=True))
+          Path(stem+"_audit.json").write_text(json.dumps(report,indent=2,allow_nan=False)+"\n")
+          PY
+      - name: Archive raw results even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lagged-facility-pue-${{ matrix.scenario.name }}
+          path: research/results/lagged_pue_*
+          retention-days: 90
+          if-no-files-found: warn

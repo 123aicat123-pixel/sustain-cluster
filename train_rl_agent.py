@@ -94,7 +94,8 @@ def make_env(sim_cfg_path, dc_cfg_path, reward_cfg_path, writer=None, logger=Non
         start_time=start,
         end_time=end,
         reward_fn=reward_fn,
-        writer=writer if sim_cfg.get("use_tensorboard", False) else None
+        writer=writer if sim_cfg.get("use_tensorboard", False) else None,
+        sim_config=sim_cfg,
     )
 
 

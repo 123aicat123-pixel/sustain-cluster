@@ -1,0 +1,75 @@
+name: Research lagged PUE December calendar recovery
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-lagged-pue-december-recovery.yml"
+      - "research/lagged_pue_prospective_audit.py"
+      - "research/tests/test_lagged_pue_prospective_audit.py"
+      - "research/calendar_index_guard.py"
+      - "research/tests/test_calendar_index_guard.py"
+      - "research/unified_baseline_smoke.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prospective-lagged-pue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - {name: dec10_05, month: 12, day: 10, scale: "0.05"}
+          - {name: dec10_10, month: 12, day: 10, scale: "0.10"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Unpack fixed Alibaba 2020 source
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Test signed outcome and cohort audits
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_lagged_pue_prospective_audit.py' -v 2>&1 | tee research/results/lagged_pue_prospective_unit.log
+          python -m unittest discover -s research/tests -p 'test_lagged_pue_proxy.py' -v 2>&1 | tee research/results/lagged_pue_proxy_unit.log
+          python -m unittest discover -s research/tests -p 'test_calendar_index_guard.py' -v 2>&1 | tee research/results/calendar_index_unit.log
+      - name: Matched simulator benchmark
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --start-month ${{ matrix.scenario.month }} \
+            --start-day ${{ matrix.scenario.day }} \
+            --cpu-capacity-scale ${{ matrix.scenario.scale }} \
+            --seeds 901 1701 \
+            --policies queue_nsga2_indexed_transit queue_nsga2_lagged_pue sla_feasible_carbon \
+            --output-prefix research/results/prospective_pue_${{ matrix.scenario.name }} \
+            2>&1 | tee research/results/prospective_pue_${{ matrix.scenario.name }}.log
+      - name: Preserve all joint carbon and SLA outcomes including regressions
+        run: |
+          set -o pipefail
+          python -m research.lagged_pue_prospective_audit \
+            --runs research/results/prospective_pue_${{ matrix.scenario.name }}.json \
+            --tasks research/results/prospective_pue_${{ matrix.scenario.name }}_completed_tasks.csv \
+            --output research/results/prospective_pue_${{ matrix.scenario.name }}_audit.json \
+            2>&1 | tee research/results/prospective_pue_${{ matrix.scenario.name }}_audit.log
+      - name: Archive raw data including failed/censored scenarios
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prospective-lagged-pue-recovered-${{ matrix.scenario.name }}
+          path: |
+            research/results/prospective_pue_*
+            research/results/lagged_pue_prospective_unit.log
+            research/results/lagged_pue_proxy_unit.log
+            research/results/calendar_index_unit.log
+          retention-days: 90
+          if-no-files-found: warn

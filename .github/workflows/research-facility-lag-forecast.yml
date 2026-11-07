@@ -1,0 +1,127 @@
+name: Research frozen date-split facility lag forecasting
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - "research/facility_lag_forecast.py"
+      - "research/facility_lag_phase_audit.py"
+      - "research/tests/test_facility_lag_phase_audit.py"
+      - "research/batch_unified_baselines.py"
+      - "research/facility_lag_benchmark.py"
+      - "research/tests/test_facility_lag_forecast.py"
+      - "research/facility_lag_calibration_protocol_2026-11-05.md"
+      - ".github/workflows/research-facility-lag-forecast.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  telemetry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        day:
+          - {name: train_june15, month: 6, day: 15}
+          - {name: train_nov12, month: 11, day: 12}
+          - {name: dev_may19, month: 5, day: 19}
+          - {name: test_mar09, month: 3, day: 9}
+          - {name: test_sep21, month: 9, day: 21}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Unpack workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Frozen matched workload and policy, read-only facility logging
+        run: |
+          set -o pipefail
+          mkdir -p research/results/facility_lag
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --cpu-capacity-scale 0.05 \
+            --start-month ${{ matrix.day.month }} \
+            --start-day ${{ matrix.day.day }} \
+            --seeds 901 1701 \
+            --policies queue_nsga2_with_transit \
+            --record-facility-telemetry \
+            --output-prefix "research/results/facility_lag/${{ matrix.day.name }}" \
+            2>&1 | tee "research/results/facility_lag/${{ matrix.day.name }}.log"
+      - name: Audit no fallback, complete cohort, 5 sites x 128 steps
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          stem="research/results/facility_lag/${{ matrix.day.name }}"
+          data=json.loads(Path(stem+".json").read_text())
+          audit=json.loads(Path(stem+"_facility_audit.json").read_text())
+          assert len(data)==2 and len(audit)==2
+          for row in data:
+              assert row["fully_drained"] and row["fallback_assignments"]==0
+              assert row["tasks_finished"]==row["tasks_dispatched"]
+              assert row["lifecycle_conserved"]
+              assert row["steps_completed"]==128
+          assert all(x["reconciled"] and x["datacenters"]==5 and
+                     x["steps"]==128 and x["cells"]==640 for x in audit)
+          print("telemetry reconciliation PASS",stem)
+          PY
+      - name: Keep raw data for negative and positive results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frozen-facility-${{ matrix.day.name }}
+          path: research/results/facility_lag/${{ matrix.day.name }}*
+          retention-days: 90
+          if-no-files-found: warn
+
+  evaluate:
+    needs: telemetry
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install only NumPy for frozen read-only benchmark
+        run: python -m pip install numpy
+      - name: Run lag-leakage tests before holdout evaluation
+        run: |
+          set -o pipefail
+          mkdir -p research/results/facility_lag
+          python -m unittest discover -s research/tests -p 'test_facility_lag_forecast.py' -v 2>&1 | tee research/results/facility_lag/unit_tests.log
+          python -m unittest discover -s research/tests -p 'test_facility_lag_phase_audit.py' -v 2>&1 | tee research/results/facility_lag/phase_unit_tests.log
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frozen-facility-*
+          path: research/results/facility_lag/collected
+          merge-multiple: true
+      - name: Freeze coefficients on training dates and score ALL dates
+        run: |
+          set -o pipefail
+          python -m research.facility_lag_benchmark \
+            --directory research/results/facility_lag/collected \
+            --output research/results/facility_lag/frozen_date_split_forecast.json \
+            2>&1 | tee research/results/facility_lag/frozen_date_split_forecast.log
+      - name: Independently verify frozen metrics and admission-vs-drain error
+        run: |
+          set -o pipefail
+          python -m research.facility_lag_phase_audit \
+            --directory research/results/facility_lag/collected \
+            --forecast research/results/facility_lag/frozen_date_split_forecast.json \
+            --output research/results/facility_lag/frozen_phase_breakdown.json \
+            2>&1 | tee research/results/facility_lag/frozen_phase_breakdown.log
+      - name: Archive coefficients, split digests, metrics and raw output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frozen-facility-evaluation
+          path: research/results/facility_lag/
+          retention-days: 90
+          if-no-files-found: warn

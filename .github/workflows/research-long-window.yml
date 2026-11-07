@@ -1,0 +1,77 @@
+name: Research longer-window paired-cohort validation
+
+# Separate from every-commit smoke, since this installs upstream simulator
+# dependencies and runs 12 extended simulations.
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-long-window.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  long-window:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install full simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract Alibaba workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Run 16-hour admission and 32-hour drain at common seeds
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 64 --drain-steps 128 \
+            --seeds 1 42 2026 \
+            --policies lowest_carbon lowest_price round_robin sla_feasible_carbon \
+            --output-prefix research/results/long_window \
+            2>&1 | tee research/results/long_window.log
+      - name: Verify identical cohorts, timing and paired SLA outcomes
+        run: |
+          set -o pipefail
+          python -m research.paired_task_analysis \
+            --input research/results/long_window_completed_tasks.csv \
+            --output research/results/long_window_pair_audit.json \
+            2>&1 | tee research/results/long_window_pair_audit.log
+      - name: Reject censored or unequal-cohort publication claims
+        run: |
+          python - <<'PY'
+          import json
+          p='research/results/long_window.json'
+          rows=json.load(open(p, encoding='utf-8'))
+          assert len(rows)==12, f'Expected 12 runs, got {len(rows)}'
+          for r in rows:
+              assert r['lifecycle_conserved']
+              assert r['tasks_finished'] == r['task_audit_completed']
+              assert r['sla_violated'] == r['task_audit_violated']
+              assert r['local_dispatches'] + r['remote_dispatches'] == r['tasks_dispatched']
+          for seed in [1,42,2026]:
+              subset=[r for r in rows if r['seed']==seed]
+              counts={r['tasks_dispatched'] for r in subset}
+              assert len(counts)==1, f'Unequal admission count for {seed}: {counts}'
+          incomplete=[(r['seed'],r['policy'],r['unfinished_dispatched']) for r in rows if not r['fully_drained']]
+          with open('research/results/long_window_validation.json','w') as f:
+              json.dump({'runs':len(rows),'fully_drained_all':not incomplete,'incomplete':incomplete},f,indent=2)
+          # Do not mark workflow as an algorithm benchmark if incomplete:
+          if incomplete:
+              print('WARNING: some runs censored; cannot claim paired full-cohort SLA rankings:',incomplete)
+          else:
+              print('All runs drained; task-level paired comparison permitted as descriptive evidence only.')
+          PY
+      - name: Archive raw task outcomes and validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: long-window-raw-cohort-evidence
+          path: research/results/long_window*
+          if-no-files-found: warn
+          retention-days: 90

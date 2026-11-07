@@ -1,0 +1,97 @@
+name: Research in-transit queue cross-calendar validation
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-transit-crossdate.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-transit-crossdate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  crossdate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install upstream dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract Alibaba full-year trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Fixed-parameter August and October cross-date experiments
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          for scenario in "aug15 8 15" "oct01 10 1"; do
+            set -- $scenario
+            name=$1; month=$2; day=$3
+            python -m research.batch_unified_baselines \
+              --steps 16 --drain-steps 112 \
+              --seeds 501 733 \
+              --start-month "$month" --start-day "$day" \
+              --cpu-capacity-scale 0.05 \
+              --policies queue_nsga2 queue_nsga2_with_transit \
+              --output-prefix "research/results/transit_crossdate_${name}" \
+              2>&1 | tee "research/results/transit_crossdate_${name}.log"
+          done
+      - name: Validate independent calendars, paired tasks and prediction integrity
+        run: |
+          python - <<'PY'
+          import csv,json
+          from pathlib import Path
+          seen_cohorts=[]
+          for name,month,day in [('aug15',8,15),('oct01',10,1)]:
+              stem=f'research/results/transit_crossdate_{name}'
+              rows=json.load(open(stem+'.json'))
+              assert len(rows)==4
+              for seed in (501,733):
+                  subset=[r for r in rows if r['seed']==seed]
+                  assert len(subset)==2
+                  assert len({r['tasks_dispatched'] for r in subset})==1
+                  assert all(r['scenario_start_month']==month and r['scenario_start_day']==day for r in subset)
+                  assert all(r['fully_drained'] and r['fallback_assignments']==0 for r in subset)
+                  for r in subset:
+                      assert r['lifecycle_conserved']
+                      assert r['task_audit_completed']==r['tasks_finished']
+                      assert r['forecast_count']==r['tasks_finished']
+                      assert r['forecast_actual_sla_misses']==r['sla_violated']
+                      print(name,seed,r['policy'],'count',r['tasks_finished'],
+                            'MAE',r['forecast_mae_minutes'],'false safe',
+                            r['forecast_false_safe_count'],'SLA misses',
+                            r['sla_violated'],'USD',r['reported_total_cost_usd'],
+                            'carbon',r['reported_total_carbon_kg'])
+              with open(stem+'_completed_tasks.csv',newline='') as f:
+                  tasks=list(csv.DictReader(f))
+              selected={(t['arrival_utc'],t['job_name']) for t in tasks
+                        if t['seed']=='501' and t['policy']=='queue_nsga2'}
+              assert selected
+              seen_cohorts.append(selected)
+          assert seen_cohorts[0]!=seen_cohorts[1], 'identical task dates'
+          print('All experiment cohorts independently verified.')
+          PY
+      - name: Verify task-level matched SLA outcomes on each date
+        run: |
+          set -o pipefail
+          for name in aug15 oct01; do
+            python -m research.paired_task_analysis \
+              --input "research/results/transit_crossdate_${name}_completed_tasks.csv" \
+              --reference queue_nsga2 \
+              --output "research/results/transit_crossdate_${name}_paired.json" \
+              2>&1 | tee "research/results/transit_crossdate_${name}_paired.log"
+          done
+      - name: Archive raw tasks and independent cross-date evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transit-queue-crossdate-evidence
+          path: research/results/transit_crossdate_*
+          retention-days: 90
+          if-no-files-found: warn

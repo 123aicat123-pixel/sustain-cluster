@@ -1,0 +1,117 @@
+name: Research single-route counterfactual simulator perturbation
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - "research/single_route_intervention.py"
+      - "research/single_route_intervention_audit.py"
+      - "research/tests/test_single_route_intervention_audit.py"
+      - "research/tests/test_single_route_intervention.py"
+      - "research/unified_baseline_smoke.py"
+      - ".github/workflows/research-single-route-intervention.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  one-route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        case:
+          - {name: june15_05, month: 6, day: 15}
+          - {name: nov12_05, month: 11, day: 12}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator requirements
+        run: python -m pip install -r requirements.txt
+      - name: Extract existing Alibaba trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Validate legal single-route perturbation
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m unittest discover -s research/tests -p 'test_single_route_intervention.py' -v 2>&1 | tee research/results/route_probe_contracts.log
+          python -m unittest discover -s research/tests -p 'test_single_route_intervention_audit.py' -v 2>&1 | tee research/results/route_probe_audit_contracts.log
+      - name: Run matched 12-horizon exploratory intervention simulations
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --cpu-capacity-scale 0.05 \
+            --start-month ${{ matrix.case.month }} \
+            --start-day ${{ matrix.case.day }} \
+            --seeds 901 1701 \
+            --policies probe_control probe_low_ci probe_high_ci \
+            --record-facility-telemetry \
+            --output-prefix "research/results/single_route_${{ matrix.case.name }}" \
+            2>&1 | tee "research/results/single_route_${{ matrix.case.name }}.log"
+      - name: Verify identical target and all simulator accounting
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          stem="research/results/single_route_${{ matrix.case.name }}"
+          runs=json.loads(Path(stem+".json").read_text())
+          audit=json.loads(Path(stem+"_facility_audit.json").read_text())
+          assert len(runs)==6 and len(audit)==6
+          assert all(x["reconciled"] and x["datacenters"]==5 and
+                     x["steps"]==128 and x["cells"]==640 for x in audit)
+          for seed in (901,1701):
+              a=[r for r in runs if r["seed"]==seed]
+              assert len(a)==3
+              assert len({r["tasks_dispatched"] for r in a})==1
+              assert all(r["fully_drained"] and r["fallback_assignments"]==0
+                         and r["tasks_finished"]==r["tasks_dispatched"]
+                         and r["lifecycle_conserved"] for r in a)
+              by={r["policy"]:r for r in a}
+              ctrl=by["probe_control"]["probe_intervention"]
+              assert ctrl is not None, "could not identify controlled task"
+              for arm in ("probe_low_ci","probe_high_ci"):
+                  candidate=by[arm]["probe_intervention"]
+                  assert candidate is not None
+                  assert candidate["task_name"]==ctrl["task_name"]
+                  assert candidate["task_index"]==ctrl["task_index"]
+                  assert candidate["control_dc_id"]==ctrl["control_dc_id"]
+                  assert candidate["selected_dc_id"]!=ctrl["control_dc_id"]
+                  p=by[arm]
+                  ref=by["probe_control"]
+                  print(seed,arm,"one task",candidate["task_name"],
+                        "original",ctrl["control_dc_id"],
+                        "destination",candidate["selected_dc_id"],
+                        "SLA",ref["sla_violated"],p["sla_violated"],
+                        "actual facility delta kg",p["facility_carbon_kg"]-ref["facility_carbon_kg"],
+                        "transmission delta kg",p["transmission_carbon_kg"]-ref["transmission_carbon_kg"],
+                        "cost delta USD",p["reported_total_cost_usd"]-ref["reported_total_cost_usd"])
+          PY
+      - name: Independently assert EXACTLY ONE changed realized task route
+        run: |
+          set -o pipefail
+          python -m research.single_route_intervention_audit \
+            --prefix "research/results/single_route_${{ matrix.case.name }}" \
+            2>&1 | tee "research/results/single_route_${{ matrix.case.name }}_paired_route_audit.log"
+      - name: Explain full facility IT HVAC and carbon-intensity impacts
+        run: |
+          set -o pipefail
+          for arm in probe_low_ci probe_high_ci; do
+            python -m research.facility_carbon_audit \
+              --prefix "research/results/single_route_${{ matrix.case.name }}" \
+              --reference probe_control \
+              --candidate "$arm" \
+              2>&1 | tee "research/results/single_route_${{ matrix.case.name }}_${arm}.log"
+          done
+      - name: Archive complete positive and negative interventions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: single-route-${{ matrix.case.name }}
+          path: research/results/single_route_*
+          retention-days: 90
+          if-no-files-found: warn

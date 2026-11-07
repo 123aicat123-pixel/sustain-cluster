@@ -1,0 +1,72 @@
+name: Research frozen transit prospective calendar capacity matrix
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-transit-prospective.yml"
+      - "research/prospective_transit_protocol_2026-11-05.md"
+      - "research/prospective_transit_audit.py"
+      - "research/tests/test_prospective_transit_audit.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prospective-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - { name: feb12_05, month: 2, day: 12, scale: "0.05" }
+          - { name: feb12_10, month: 2, day: 12, scale: "0.10" }
+          - { name: may19_05, month: 5, day: 19, scale: "0.05" }
+          - { name: may19_10, month: 5, day: 19, scale: "0.10" }
+          - { name: nov12_05, month: 11, day: 12, scale: "0.05" }
+          - { name: nov12_10, month: 11, day: 12, scale: "0.10" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator
+        run: python -m pip install -r requirements.txt
+      - name: Extract archived Alibaba task trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Validate frozen audit contracts
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m unittest discover -s research/tests -p 'test_prospective_transit_audit.py' -v 2>&1 | tee research/results/prospective_unit.log
+      - name: Execute unchanged policy budget and task cohort
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --start-month ${{ matrix.scenario.month }} \
+            --start-day ${{ matrix.scenario.day }} \
+            --cpu-capacity-scale ${{ matrix.scenario.scale }} \
+            --seeds 901 1701 \
+            --policies queue_nsga2_no_queue queue_nsga2 queue_nsga2_with_transit \
+            --output-prefix "research/results/prospective_${{ matrix.scenario.name }}" \
+            2>&1 | tee "research/results/prospective_${{ matrix.scenario.name }}.log"
+      - name: Validate lifecycle and pairable outcomes (censor incomplete runs)
+        run: |
+          set -o pipefail
+          python -m research.prospective_transit_audit \
+            --prefix "research/results/prospective_${{ matrix.scenario.name }}" \
+            --month ${{ matrix.scenario.month }} \
+            --day ${{ matrix.scenario.day }} \
+            --cpu-scale ${{ matrix.scenario.scale }} \
+            2>&1 | tee "research/results/prospective_${{ matrix.scenario.name }}_audit.log"
+      - name: Preserve all outcomes including failures and censored cases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prospective-transit-${{ matrix.scenario.name }}
+          path: research/results/prospective_*
+          retention-days: 90
+          if-no-files-found: warn

@@ -1,0 +1,53 @@
+name: Research carbon attribution from audited stress artifact
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-carbon-attribution.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-carbon-attribution.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Test attribution logic without simulation
+        run: python -m unittest discover -s research/tests -p 'test_queue_carbon_diagnostics.py' -v
+      - name: Retrieve already verified 5pct capacity raw results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p research/results/attribution_source
+          gh run download 41791930845 \
+            --repo "${{ github.repository }}" \
+            --name queue-contention-ablation-data \
+            --dir research/results/attribution_source
+          ls -l research/results/attribution_source
+      - name: Decompose queue impact into plant and network contributions
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m research.queue_carbon_diagnostics \
+            --input research/results/attribution_source/queue_stress_005.json \
+            --reference queue_nsga2_no_queue \
+            --output research/results/queue_carbon_attribution_005.json \
+            2>&1 | tee research/results/queue_carbon_attribution_005.log
+      - name: Archive standalone attribution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-carbon-attribution-5pct
+          path: research/results/queue_carbon_attribution_*
+          if-no-files-found: warn

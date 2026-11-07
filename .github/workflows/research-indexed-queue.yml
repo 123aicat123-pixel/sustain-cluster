@@ -1,0 +1,91 @@
+name: Research indexed queue predictor controlled ablation
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-indexed-queue.yml"
+      - "research/queue_aware_nsga2.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/tests/test_indexed_queue_projection.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  indexed-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulation requirements
+        run: python -m pip install -r requirements.txt
+      - name: Unzip trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Check randomized predictor equivalence
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_indexed_queue_projection.py' -v 2>&1 | tee research/results/indexed_unit.log
+      - name: Run matched full simulator
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --start-month 6 --start-day 15 --cpu-capacity-scale 0.05 \
+            --seeds 901 1701 \
+            --policies queue_nsga2_with_transit queue_nsga2_indexed_transit \
+            --output-prefix research/results/indexed_queue \
+            2>&1 | tee research/results/indexed_queue.log
+      - name: Enforce matched full-completion and task-level outcomes
+        run: |
+          python - <<'PY'
+          import csv, json
+          from pathlib import Path
+          from research.planner_overhead_audit import audit_planner_rows
+          from research.paired_task_analysis import compare_task_rows
+          stem="research/results/indexed_queue"
+          rows=json.loads(Path(stem+".json").read_text())
+          tasks=list(csv.DictReader(open(stem+"_completed_tasks.csv",newline="")))
+          report=[]
+          for seed in (901,1701):
+              paired=[r for r in rows if r["seed"]==seed]
+              assert len(paired)==2
+              audit=audit_planner_rows(paired)
+              original=next(r for r in paired if r["policy"]=="queue_nsga2_with_transit")
+              indexed=next(r for r in paired if r["policy"]=="queue_nsga2_indexed_transit")
+              for key in ("sla_violated","reported_total_carbon_kg",
+                          "reported_total_cost_usd","forecast_mae_minutes"):
+                  assert original[key]==indexed[key], (seed,key,original[key],indexed[key])
+              comparison=compare_task_rows(
+                  [r for r in tasks if int(r["seed"])==seed],
+                  reference="queue_nsga2_with_transit"
+              )
+              assert len(comparison)==1
+              item=comparison[0]
+              for key in ("destination_changes","start_time_changes",
+                          "finish_time_changes","sla_rescued","sla_harmed"):
+                  assert item[key]==0, (seed,key,item[key])
+              timing={r["policy"]:r for r in audit}
+              report.append({
+                  "seed":seed,"tasks":original["tasks_dispatched"],
+                  "p95_ms_delta":timing["queue_nsga2_indexed_transit"]["p95_ms"]-timing["queue_nsga2_with_transit"]["p95_ms"],
+                  "per_task_ms_delta":timing["queue_nsga2_indexed_transit"]["ms_per_task"]-timing["queue_nsga2_with_transit"]["ms_per_task"],
+                  "projection_seconds_delta":indexed["planner_projection_seconds"]-original["planner_projection_seconds"],
+                  "task_level_equal":True
+              })
+          Path(stem+"_audit.json").write_text(json.dumps(report,indent=2)+"\n")
+          print(json.dumps(report,indent=2))
+          PY
+      - name: Archive raw runs including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexed-queue-ablation
+          path: research/results/indexed_*
+          retention-days: 90
+          if-no-files-found: warn

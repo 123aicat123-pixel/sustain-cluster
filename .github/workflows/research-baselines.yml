@@ -1,0 +1,83 @@
+name: Research baseline contract checks
+
+on:
+  push:
+    branches: [research-baselines]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install minimal selector dependencies
+        run: python -m pip install numpy pandas
+      - name: Compile core Python modules (syntax only)
+        run: |
+          python -m compileall -q utils/task_assignment_strategies.py envs/task_scheduling_env.py simulation/cluster_manager.py
+      - name: Execute rule-based policy contract tests
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m unittest discover -s research/tests -p 'test_*.py' -v 2>&1 | tee research/results/baseline-contract-tests.log
+      - name: Upload contract test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-baseline-contract-logs
+          path: research/results/
+          if-no-files-found: warn
+
+  full-simulator-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install upstream simulation dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract workload dataset
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Run real-simulator policies with seed 42
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m research.smoke_original_baselines --steps 8 --seed 42 2>&1 | tee research/results/full-simulator-smoke.log
+      - name: Run matched routing adapter smoke
+        run: |
+          set -o pipefail
+          python -m research.unified_baseline_smoke --steps 16 --drain-steps 16 --seed 42 --policies lowest_carbon lowest_price round_robin sla_feasible_carbon 2>&1 | tee research/results/unified-baseline-smoke.log
+      - name: Run paired multi-seed adapted baselines (exploratory)
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines --steps 32 --drain-steps 32 --seeds 1 42 2026 --policies lowest_carbon lowest_price round_robin sla_feasible_carbon edf_sla_carbon 2>&1 | tee research/results/unified-batch.log
+      - name: Audit identical task cohorts and paired SLA outcomes
+        run: |
+          set -o pipefail
+          python -m research.paired_task_analysis 2>&1 | tee research/results/paired-task-audit.log
+      - name: CPU-constrained contention sensitivity smoke
+        run: |
+          set -o pipefail
+          for scale in 0.02 0.05; do
+            key=${scale//./}
+            python -m research.batch_unified_baselines --steps 32 --drain-steps 96 --seeds 42 --policies lowest_carbon sla_feasible_carbon --cpu-capacity-scale "$scale" --output-prefix "research/results/cpu_stress_${key}" 2>&1 | tee "research/results/cpu-stress-${key}.log"
+          done
+          echo "CPU-stress is exploratory: matched cohort comparison is invalid if completion is censored."
+      - name: Archive full-simulator results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-full-simulator-smoke
+          path: research/results/
+          if-no-files-found: warn
