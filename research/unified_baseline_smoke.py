@@ -36,7 +36,7 @@ from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
 from research.lagged_pue_risk_policy import QueueAwareLaggedPUEShadowGuard
-from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareIndexedTransit, QueueAwareLaggedPUE, QueueAwareLaggedPUEFrontTaskwise, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk, QueueAwareFrontCarbonTaskwise
+from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareIndexedTransit, QueueAwareLaggedPUE, QueueAwareLaggedPUEFrontTaskwise, QueueAwareLaggedPUEKnownQueue, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk, QueueAwareFrontCarbonTaskwise
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -60,6 +60,7 @@ POLICIES = {
     "queue_nsga2_indexed_transit": QueueAwareIndexedTransit,
     "queue_nsga2_lagged_pue": QueueAwareLaggedPUE,
     "queue_nsga2_lagged_pue_front_taskwise": QueueAwareLaggedPUEFrontTaskwise,
+    "queue_nsga2_lagged_pue_known_queue": QueueAwareLaggedPUEKnownQueue,
     "queue_nsga2_lagged_pue_shadow_guard": QueueAwareLaggedPUEShadowGuard,
     "queue_nsga2_adaptive_transit": QueueAwareCongestionAdaptive,
     "queue_nsga2_front_carbon_risk": QueueAwareFrontCarbonRisk,
@@ -321,6 +322,10 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         assert abs(summary["planner_dispatch_max_ms"] - planner_dispatch_max_seconds * 1000) < 1e-8
         summary["nsga2_surrogate_evaluations"] = getattr(policy, "surrogate_evaluations", 0)
         summary["nsga2_evaluation_requests"] = getattr(policy, "evaluation_requests", 0)
+        summary["known_queue_baseline_calls"] = getattr(policy, "known_queue_baseline_calls", 0)
+        summary["known_queue_extra_calls"] = getattr(policy, "known_queue_extra_calls", 0)
+        summary["known_queue_projection_seconds"] = getattr(policy, "known_queue_projection_seconds", 0.0)
+        summary["known_queue_positive_penalty_calls"] = getattr(policy, "known_queue_positive_penalty_calls", 0)
         summary["shadow_evaluation_requests"] = getattr(policy, "shadow_evaluation_requests", 0)
         summary["shadow_surrogate_evaluations"] = getattr(policy, "shadow_surrogate_evaluations", 0)
         summary["total_nsga2_evaluation_requests"] = summary["nsga2_evaluation_requests"] + summary["shadow_evaluation_requests"]
