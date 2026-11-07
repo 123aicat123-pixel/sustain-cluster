@@ -79,6 +79,11 @@ jobs:
               assert req>0 and all(int(x["nsga2_evaluation_requests"])==req for x in cohort)
               assert all(int(x["shadow_evaluation_requests"])==0 for x in cohort)
               assert all(int(x["total_nsga2_evaluation_requests"])==req for x in cohort)
+              assert int(new["known_queue_selected_decisions"])==int(new["planner_dispatch_calls"])
+              assert int(new["known_queue_selected_decisions"])>0
+              assert 0<=int(new["known_queue_selected_positive_batches"])<=int(new["known_queue_selected_decisions"])
+              assert math.isfinite(float(new["known_queue_selected_penalty_minutes"]))
+              assert float(new["known_queue_selected_penalty_minutes"])>=0
               assert int(new["known_queue_extra_calls"])>0
               assert 0<int(new["known_queue_baseline_calls"])<=int(new["known_queue_extra_calls"])
               assert 0<=int(new["known_queue_positive_penalty_calls"])<=int(new["known_queue_extra_calls"])
@@ -92,6 +97,8 @@ jobs:
                 "known_extra_calls":int(new["known_queue_extra_calls"]),
                 "positive_penalty_calls":int(new["known_queue_positive_penalty_calls"]),
                 "known_projection_seconds":extra,
+                "selected_known_tardiness_minutes":float(new["known_queue_selected_penalty_minutes"]),
+                "selected_risk_positive_batches":int(new["known_queue_selected_positive_batches"]),
                 "sla_delta_vs_indexed":int(new["sla_violated"])-int(baseline["sla_violated"]),
                 "sla_delta_vs_pue":int(new["sla_violated"])-int(pue["sla_violated"]),
                 "carbon_delta_vs_indexed_kg":new["reported_total_carbon_kg"]-baseline["reported_total_carbon_kg"],
