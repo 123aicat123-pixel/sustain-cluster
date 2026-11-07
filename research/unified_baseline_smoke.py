@@ -35,6 +35,7 @@ from research.queue_prediction_audit import audit_forecasts
 from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
+from research.lagged_pue_risk_policy import QueueAwareLaggedPUEShadowGuard
 from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareIndexedTransit, QueueAwareLaggedPUE, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk, QueueAwareFrontCarbonTaskwise
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
@@ -58,6 +59,7 @@ POLICIES = {
     "queue_nsga2_with_transit": QueueAwareWithTransit,
     "queue_nsga2_indexed_transit": QueueAwareIndexedTransit,
     "queue_nsga2_lagged_pue": QueueAwareLaggedPUE,
+    "queue_nsga2_lagged_pue_shadow_guard": QueueAwareLaggedPUEShadowGuard,
     "queue_nsga2_adaptive_transit": QueueAwareCongestionAdaptive,
     "queue_nsga2_front_carbon_risk": QueueAwareFrontCarbonRisk,
     "queue_nsga2_front_carbon_taskwise": QueueAwareFrontCarbonTaskwise,
@@ -318,6 +320,15 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         assert abs(summary["planner_dispatch_max_ms"] - planner_dispatch_max_seconds * 1000) < 1e-8
         summary["nsga2_surrogate_evaluations"] = getattr(policy, "surrogate_evaluations", 0)
         summary["nsga2_evaluation_requests"] = getattr(policy, "evaluation_requests", 0)
+        summary["shadow_evaluation_requests"] = getattr(policy, "shadow_evaluation_requests", 0)
+        summary["shadow_surrogate_evaluations"] = getattr(policy, "shadow_surrogate_evaluations", 0)
+        summary["total_nsga2_evaluation_requests"] = summary["nsga2_evaluation_requests"] + summary["shadow_evaluation_requests"]
+        summary["risk_guard_checks"] = getattr(policy, "risk_guard_checks", 0)
+        summary["risk_guard_reversions"] = getattr(policy, "risk_guard_reversions", 0)
+        summary["risk_guard_late_tasks"] = getattr(policy, "risk_guard_late_tasks", 0)
+        summary["risk_guard_blocked_route_changes"] = getattr(policy, "risk_guard_blocked_route_changes", 0)
+        summary["shadow_planner_projection_calls"] = getattr(policy, "shadow_planner_projection_calls", 0)
+        summary["shadow_planner_projection_seconds"] = getattr(policy, "shadow_planner_projection_seconds", 0.0)
         summary["nsga2_batch_optimizations"] = getattr(policy, "optimizations", 0)
         summary["carbon_guard_checks"] = getattr(policy, "carbon_guard_checks", 0)
         summary["carbon_guard_interventions"] = getattr(policy, "carbon_guard_interventions", 0)
