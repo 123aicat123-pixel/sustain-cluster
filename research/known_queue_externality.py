@@ -76,7 +76,8 @@ def project_tracked_starts(dc, arrivals, now, *, tracked=(), max_steps=672):
     raise RuntimeError("tracked queue prediction exhausted")
 
 
-def known_queue_externality(dc, new_arrivals, now, pending_transit=()):
+def known_queue_externality(dc, new_arrivals, now, pending_transit=(),
+                            *, baseline_starts=None):
     """Compare known-task predicted start under no dispatch vs hypothetical batch.
 
     The same currently committed transit arrivals are included in both arms.
@@ -87,8 +88,13 @@ def known_queue_externality(dc, new_arrivals, now, pending_transit=()):
     existing = existing_pending + tuple(task for task, _ in transit)
     if len({id(t) for t in existing}) != len(existing):
         raise AssertionError("duplicate committed queue task")
-    no_action = project_tracked_starts(
-        dc, transit, now, tracked=existing_pending)
+    if baseline_starts is None:
+        no_action = project_tracked_starts(
+            dc, transit, now, tracked=existing_pending)
+    else:
+        if set(baseline_starts) != set(existing):
+            raise AssertionError("cached known queue baseline has incorrect tasks")
+        no_action = baseline_starts
     with_action = project_tracked_starts(
         dc, transit + list(new_arrivals), now, tracked=existing_pending)
     total_delay = total_added_tardiness = 0.0
