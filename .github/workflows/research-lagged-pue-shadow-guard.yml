@@ -8,6 +8,8 @@ on:
       - "research/lagged_pue_risk_policy.py"
       - "research/tests/test_lagged_pue_shadow_guard.py"
       - "research/unified_baseline_smoke.py"
+      - "research/route_spillover_audit.py"
+      - "research/tests/test_route_spillover_audit.py"
   workflow_dispatch:
 
 permissions:
@@ -37,6 +39,7 @@ jobs:
           set -o pipefail
           mkdir -p research/results
           python -m unittest discover -s research/tests -p 'test_lagged_pue_shadow_guard.py' -v 2>&1 | tee research/results/shadow_guard_unit.log
+          python -m unittest discover -s research/tests -p 'test_route_spillover_audit.py' -v 2>&1 | tee research/results/route_spillover_unit.log
       - name: Matched development simulation
         run: |
           set -o pipefail
@@ -104,6 +107,15 @@ jobs:
               print(json.dumps(record,sort_keys=True))
           Path(stem+"_audit.json").write_text(json.dumps(report,indent=2,allow_nan=False)+"\n")
           PY
+      - name: Diagnose unchanged-destination SLA spillovers
+        run: |
+          set -o pipefail
+          python -m research.route_spillover_audit \
+            --tasks research/results/shadow_guard_${{ matrix.scenario.name }}_completed_tasks.csv \
+            --reference queue_nsga2_indexed_transit \
+            --candidates queue_nsga2_lagged_pue queue_nsga2_lagged_pue_shadow_guard \
+            --output research/results/shadow_guard_${{ matrix.scenario.name }}_spillover.json \
+            2>&1 | tee research/results/shadow_guard_${{ matrix.scenario.name }}_spillover.log
       - name: Keep all raw scenarios (including regressions and failures)
         if: always()
         uses: actions/upload-artifact@v4
