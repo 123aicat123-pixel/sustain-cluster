@@ -1,0 +1,38 @@
+name: Research known-queue externality predictor contracts
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-known-queue-externality.yml"
+      - "research/known_queue_externality.py"
+      - "research/tests/test_known_queue_externality.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  externality-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install dependencies for predictor parity
+        run: python -m pip install -r requirements.txt
+      - name: Independent externality and FIFO parity tests
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_known_queue_externality.py' -v 2>&1 | tee research/results/known_queue_externality_unit.log
+      - name: Archive pass/failure output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: known-queue-externality-contracts
+          path: research/results/known_queue_externality_unit.log
+          retention-days: 90
+          if-no-files-found: warn
