@@ -90,10 +90,18 @@ class KnownQueueFitnessTests(unittest.TestCase):
     def test_reset_clears_counters(self):
         policy=QueueAwareLaggedPUEKnownQueue(seed=901)
         policy.known_queue_extra_calls=8
+        policy.known_queue_selected_penalty_minutes=27
+        policy.known_queue_selected_positive_batches=3
+        policy.known_queue_selected_decisions=4
         policy._known_queue_reference={1:{"bad":3}}
+        policy._known_queue_candidate_penalties={(1,):27}
         policy.reset()
         self.assertEqual(policy.known_queue_extra_calls,0)
+        self.assertEqual(policy.known_queue_selected_penalty_minutes,0)
+        self.assertEqual(policy.known_queue_selected_positive_batches,0)
+        self.assertEqual(policy.known_queue_selected_decisions,0)
         self.assertEqual(policy._known_queue_reference,{})
+        self.assertEqual(policy._known_queue_candidate_penalties,{})
 
 
 if __name__=="__main__":
