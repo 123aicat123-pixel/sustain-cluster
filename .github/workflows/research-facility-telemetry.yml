@@ -1,0 +1,73 @@
+name: Research read-only facility telemetry and carbon attribution
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - "research/facility_telemetry.py"
+      - "research/facility_power_carbon_attribution.py"
+      - "research/tests/test_facility_power_carbon_attribution.py"
+      - "research/facility_carbon_audit.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/batch_unified_baselines.py"
+      - "research/tests/test_facility_telemetry.py"
+      - ".github/workflows/research-facility-telemetry.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  facility-telemetry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - {name: jun15_05, month: 6, day: 15, scale: "0.05"}
+          - {name: nov12_05, month: 11, day: 12, scale: "0.05"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install existing simulator requirements
+        run: python -m pip install -r requirements.txt
+      - name: Unpack existing task trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Check read-only telemetry accounting
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_facility_telemetry.py' -v 2>&1 | tee research/results/facility_unit.log
+          python -m unittest discover -s research/tests -p 'test_facility_power_carbon_attribution.py' -v 2>&1 | tee research/results/facility_power_unit.log
+      - name: Collect post-step physical facility telemetry on explored dates only
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --start-month ${{ matrix.scenario.month }} \
+            --start-day ${{ matrix.scenario.day }} \
+            --cpu-capacity-scale ${{ matrix.scenario.scale }} \
+            --seeds 901 1701 \
+            --policies queue_nsga2_with_transit queue_nsga2_front_carbon_taskwise \
+            --record-facility-telemetry \
+            --output-prefix "research/results/facility_${{ matrix.scenario.name }}" \
+            2>&1 | tee "research/results/facility_${{ matrix.scenario.name }}.log"
+      - name: Match every DC timestep and decompose actual carbon difference
+        run: |
+          set -o pipefail
+          python -m research.facility_carbon_audit \
+            --prefix "research/results/facility_${{ matrix.scenario.name }}" \
+            --reference queue_nsga2_with_transit \
+            --candidate queue_nsga2_front_carbon_taskwise \
+            2>&1 | tee "research/results/facility_${{ matrix.scenario.name }}_attribution.log"
+      - name: Preserve all outcomes including failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: facility-telemetry-${{ matrix.scenario.name }}
+          path: research/results/facility_*
+          retention-days: 90
+          if-no-files-found: warn

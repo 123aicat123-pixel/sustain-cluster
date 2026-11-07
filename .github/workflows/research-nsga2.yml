@@ -1,0 +1,76 @@
+name: Research NSGA-II surrogate integration
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - "research/nsga2_core.py"
+      - "research/nsga2_batch_policy.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/tests/test_nsga2.py"
+      - ".github/workflows/research-nsga2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nsga2-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install complete simulation dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract Alibaba workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: NSGA-II correctness and deterministic regression tests
+        run: |
+          mkdir -p research/results
+          set -o pipefail
+          python -m unittest discover -s research/tests -p 'test_nsga2.py' -v 2>&1 | tee research/results/nsga2-unit.log
+      - name: Full-simulator fixed-seed baseline comparison
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 32 --drain-steps 64 --seeds 42 \
+            --policies lowest_carbon sla_feasible_carbon nsga2_surrogate \
+            --output-prefix research/results/nsga2_pilot \
+            2>&1 | tee research/results/nsga2-simulator.log
+      - name: Validate identical task cohorts and SLA decisions
+        run: |
+          set -o pipefail
+          python -m research.paired_task_analysis \
+            --input research/results/nsga2_pilot_completed_tasks.csv \
+            --output research/results/nsga2_pilot_paired_audit.json \
+            2>&1 | tee research/results/nsga2-paired.log
+      - name: Record pilot eligibility without overstating conclusions
+        run: |
+          python - <<'PY'
+          import json
+          data=json.load(open('research/results/nsga2_pilot.json',encoding='utf8'))
+          assert len(data)==3
+          assert {x['policy'] for x in data}=={'lowest_carbon','sla_feasible_carbon','nsga2_surrogate'}
+          assert len({x['tasks_dispatched'] for x in data})==1
+          for item in data:
+              assert item['lifecycle_conserved']
+              assert item['tasks_finished']==item['task_audit_completed']
+          nsga=next(x for x in data if x['policy']=='nsga2_surrogate')
+          assert nsga['nsga2_surrogate_evaluations']>0
+          assert nsga['nsga2_batch_optimizations']>0
+          print('NSGA-II proxy budgets',nsga['nsga2_surrogate_evaluations'],
+                nsga['nsga2_evaluation_requests'],
+                nsga['nsga2_batch_optimizations'])
+          print('Fully drained all:',all(x['fully_drained'] for x in data))
+          print('This is a surrogate-optimizer integration pilot, NOT a scientific performance claim.')
+          PY
+      - name: Archive code and simulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nsga2-online-surrogate-pilot
+          path: research/results/nsga2*
+          if-no-files-found: warn

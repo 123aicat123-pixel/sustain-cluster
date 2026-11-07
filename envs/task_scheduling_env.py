@@ -305,15 +305,22 @@ class TaskSchedulingEnv(gym.Env):
                         task.dest_dc_id = dest_dc_chosen_by_agent.dc_id
                         task.dest_dc = dest_dc_chosen_by_agent
                         # Handle transmission delay for this task
-                        origin_loc = self.cluster_manager.get_dc_location(task.origin_dc_id)
-                        dest_loc = dest_dc_chosen_by_agent.location
-                        delay_s = get_transmission_delay(origin_loc, dest_loc, self.cluster_manager.cloud_provider, task.bandwidth_gb)
-                        arrival_ts = self.current_time + pd.to_timedelta(delay_s, unit='s')
-                        dest_dc_name = next(name for name, dc_obj in self.cluster_manager.datacenters.items() if dc_obj.dc_id == task.dest_dc_id)
-                        self.in_transit_tasks.append((arrival_ts, task, dest_dc_name))
-                        
-                        if self.logger:
-                            self.logger.info(f"[{self.current_time}] Task {task.job_name} (batch) routed to DC{task.dest_dc_id}, delay={delay_s:.1f}s.")
+                        # Same-datacenter placement has no network transfer.
+                        # Permit execution in this timestep, as native RBC does.
+                        if task.origin_dc_id == task.dest_dc_id:
+                            dest_dc_chosen_by_agent.pending_tasks.append(task)
+                            if self.logger:
+                                self.logger.info(f"[{self.current_time}] Task {task.job_name} (batch) placed locally without transfer.")
+                        else:
+                            origin_loc = self.cluster_manager.get_dc_location(task.origin_dc_id)
+                            dest_loc = dest_dc_chosen_by_agent.location
+                            delay_s = get_transmission_delay(origin_loc, dest_loc, self.cluster_manager.cloud_provider, task.bandwidth_gb)
+                            arrival_ts = self.current_time + pd.to_timedelta(delay_s, unit='s')
+                            dest_dc_name = next(name for name, dc_obj in self.cluster_manager.datacenters.items() if dc_obj.dc_id == task.dest_dc_id)
+                            self.in_transit_tasks.append((arrival_ts, task, dest_dc_name))
+
+                            if self.logger:
+                                self.logger.info(f"[{self.current_time}] Task {task.job_name} (batch) routed to DC{task.dest_dc_id}, delay={delay_s:.1f}s.")
         else: # Multi-action mode (original logic)
             if self.cluster_manager.strategy == "manual_rl": # Only assert if RL is driving
                 assert len(actions) == len(self.current_tasks), \
@@ -346,14 +353,19 @@ class TaskSchedulingEnv(gym.Env):
                     dest_dc_chosen_by_agent = dc_list_values[action_for_task - 1]
                     task.dest_dc_id = dest_dc_chosen_by_agent.dc_id
                     task.dest_dc = dest_dc_chosen_by_agent
-                    origin_loc = self.cluster_manager.get_dc_location(task.origin_dc_id)
-                    dest_loc = dest_dc_chosen_by_agent.location
-                    delay_s = get_transmission_delay(origin_loc, dest_loc, self.cluster_manager.cloud_provider, task.bandwidth_gb)
-                    arrival_ts = self.current_time + pd.to_timedelta(delay_s, unit='s')
-                    dest_dc_name = next(name for name, dc_obj in self.cluster_manager.datacenters.items() if dc_obj.dc_id == task.dest_dc_id)
-                    self.in_transit_tasks.append((arrival_ts, task, dest_dc_name))
-                    if self.logger:
-                        self.logger.info(f"[{self.current_time}] Task {task.job_name} (individual) routed to DC{task.dest_dc_id}, delay={delay_s:.1f}s.")
+                    if task.origin_dc_id == task.dest_dc_id:
+                        dest_dc_chosen_by_agent.pending_tasks.append(task)
+                        if self.logger:
+                            self.logger.info(f"[{self.current_time}] Task {task.job_name} (individual) placed locally without transfer.")
+                    else:
+                        origin_loc = self.cluster_manager.get_dc_location(task.origin_dc_id)
+                        dest_loc = dest_dc_chosen_by_agent.location
+                        delay_s = get_transmission_delay(origin_loc, dest_loc, self.cluster_manager.cloud_provider, task.bandwidth_gb)
+                        arrival_ts = self.current_time + pd.to_timedelta(delay_s, unit='s')
+                        dest_dc_name = next(name for name, dc_obj in self.cluster_manager.datacenters.items() if dc_obj.dc_id == task.dest_dc_id)
+                        self.in_transit_tasks.append((arrival_ts, task, dest_dc_name))
+                        if self.logger:
+                            self.logger.info(f"[{self.current_time}] Task {task.job_name} (individual) routed to DC{task.dest_dc_id}, delay={delay_s:.1f}s.")
 
         # === Step cluster manager, calculate reward, advance time (existing logic) ===
         results = self.cluster_manager.step(self.current_time, logger=self.logger)

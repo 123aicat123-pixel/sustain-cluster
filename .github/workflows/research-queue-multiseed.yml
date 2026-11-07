@@ -1,0 +1,88 @@
+name: Research queue-aware 5pct multi-seed validation
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-queue-multiseed.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-queue-multiseed.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  queue-multiseed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install full simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba task trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Run fixed-parameter, 5pct capacity, three seeds
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --seeds 27182 12345 8080 \
+            --cpu-capacity-scale 0.05 \
+            --policies sla_feasible_carbon nsga2_surrogate queue_nsga2 queue_nsga2_no_queue queue_nsga2_no_transfer \
+            --output-prefix research/results/queue_5pct_multiseed \
+            2>&1 | tee research/results/queue_5pct_multiseed.log
+      - name: Independently audit paired task SLA outcomes
+        run: |
+          set -o pipefail
+          python -m research.paired_task_analysis \
+            --input research/results/queue_5pct_multiseed_completed_tasks.csv \
+            --reference queue_nsga2_no_queue \
+            --output research/results/queue_5pct_multiseed_pair_audit.json \
+            2>&1 | tee research/results/queue_5pct_multiseed_pair.log
+      - name: Validate completion, cohorts, no fallback, objectives
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          records=json.load(open('research/results/queue_5pct_multiseed.json'))
+          expected_seeds=(27182,12345,8080)
+          expected_policies={
+            'sla_feasible_carbon','nsga2_surrogate','queue_nsga2',
+            'queue_nsga2_no_queue','queue_nsga2_no_transfer'
+          }
+          assert len(records)==15, len(records)
+          problems=[]
+          for seed in expected_seeds:
+              cohort=[x for x in records if x['seed']==seed]
+              assert {x['policy'] for x in cohort}==expected_policies
+              assert len({x['tasks_dispatched'] for x in cohort})==1
+              for x in cohort:
+                  assert x['lifecycle_conserved']
+                  assert x['tasks_finished']==x['task_audit_completed']
+                  assert x['sla_violated']==x['task_audit_violated']
+                  if not x['fully_drained'] or x['fallback_assignments']:
+                      problems.append((seed,x['policy'],x['unfinished_dispatched'],x['fallback_assignments']))
+                  if x['policy'].startswith('queue_nsga2'):
+                      assert x['nsga2_batch_optimizations']>0
+                      assert x['nsga2_surrogate_evaluations']>0
+          report={'seeds':list(expected_seeds),'all_full_comparisons_eligible':not problems,
+                  'incomplete_or_fallback':problems}
+          Path('research/results/queue_5pct_multiseed_validation.json').write_text(json.dumps(report,indent=2))
+          print('Validation:',report)
+          if problems:
+              print('CENSORED/CONFOUNDED: exclude affected runs from full-cohort rankings.')
+          PY
+      - name: Upload raw observations and independent audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-5pct-multiseed-raw
+          path: research/results/queue_5pct_multiseed*
+          retention-days: 90
+          if-no-files-found: warn

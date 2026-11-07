@@ -1,0 +1,77 @@
+name: Research SLA forecast confusion audit
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-sla-confusion.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-sla-confusion.yml"
+      - "research/queue_prediction_audit.py"
+      - "research/tests/test_queue_prediction_audit.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sla-forecast-confusion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract Alibaba workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Unit regressions for false safe and false alarm
+        run: |
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_queue_prediction_audit.py' -v | tee research/results/sla_confusion_unit.log
+      - name: Audited June 15 forecast versus realized SLA
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --seeds 733 \
+            --start-month 6 --start-day 15 \
+            --cpu-capacity-scale 0.05 \
+            --policies queue_nsga2 queue_nsga2_carbon_guard queue_nsga2_carbon_sla_guard \
+            --output-prefix research/results/sla_confusion_jun15 \
+            2>&1 | tee research/results/sla_confusion_jun15.log
+      - name: Assert forecasting matrix conserves tasks and realized misses
+        run: |
+          python - <<'PY'
+          import csv,json
+          stem='research/results/sla_confusion_jun15'
+          data=json.load(open(stem+'.json'))
+          with open(stem+'_queue_predictions.csv',newline='') as f:
+              task_rows=list(csv.DictReader(f))
+          assert len(data)==3
+          assert all(x['fully_drained'] and x['fallback_assignments']==0 for x in data)
+          assert len({x['tasks_dispatched'] for x in data})==1
+          for x in data:
+              cm=x['forecast_sla_confusion_counts']
+              assert sum(cm.values())==x['tasks_finished']==x['forecast_count']
+              assert cm['pred_met_actual_miss']==x['forecast_false_safe_count']
+              assert cm['pred_miss_actual_met']==x['forecast_false_alarm_count']
+              assert cm['pred_met_actual_miss']+cm['pred_miss_actual_miss']==x['sla_violated']
+              assert cm['pred_miss_actual_met']+cm['pred_miss_actual_miss']==x['forecast_predicted_sla_misses']
+              assert x['forecast_actual_sla_misses']==x['sla_violated']
+              print(x['policy'],'false-safe',x['forecast_false_safe_count'],
+                    'false-alarm',x['forecast_false_alarm_count'],
+                    'MAE',x['forecast_mae_minutes'],
+                    'true misses',x['sla_violated'])
+          assert len(task_rows)==sum(x['tasks_finished'] for x in data)
+          PY
+      - name: Save task-level confusion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sla-forecast-confusion-evidence
+          path: research/results/sla_confusion*
+          retention-days: 90

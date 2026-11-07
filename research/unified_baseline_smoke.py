@@ -1,0 +1,440 @@
+"""Run native RBC selectors through the same per-task routing path as learned agents.
+
+Research integration scaffold; not a publication-ready performance benchmark.
+By setting strategy=manual_rl, single_action_mode=False, disable_defer_action=False,
+all policies create *per-task actions* and pass through TaskSchedulingEnv.step(),
+including its in-transit delay handling. We deliberately keep upstream
+simulator and RBC implementation unchanged, and label this as an adapted RBC
+comparison rather than a reproduction of the native immediate-routing mode.
+
+Run: python -m research.unified_baseline_smoke --steps 16 --seed 42
+"""
+from __future__ import annotations
+
+import argparse
+import copy
+import json
+import random
+import time
+
+from research.planner_latency import summarize_dispatch_latency
+from research.calendar_index_guard import correct_overflowed_init_day
+from datetime import date
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import yaml
+
+from train_SAC_agent import make_env
+from research.lifecycle_audit import audit_lifecycle
+from research.physical_accounting import validate_datacenter_step
+from research.facility_telemetry import facility_cell
+from research.single_route_intervention import first_batch_probe
+from research.queue_prediction_audit import audit_forecasts
+from research.task_sla_audit import analyze_finished_tasks
+from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
+from research.nsga2_batch_policy import NSGA2BatchPolicy
+from research.lagged_pue_risk_policy import QueueAwareLaggedPUEShadowGuard
+from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareIndexedTransit, QueueAwareLaggedPUE, QueueAwareLaggedPUEFrontTaskwise, QueueAwareLaggedPUEKnownQueue, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk, QueueAwareFrontCarbonTaskwise
+from utils.task_assignment_strategies import (
+    DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
+    DistributeMostAvailable, DistributeLeastPending,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+POLICIES = {
+    "lowest_carbon": DistributeLowestCarbon,
+    "lowest_price": DistributeLowestPrice,
+    "round_robin": DistributeRoundRobin,
+    "probe_control": DistributeRoundRobin,
+    "probe_low_ci": DistributeRoundRobin,
+    "probe_high_ci": DistributeRoundRobin,
+    "most_available": DistributeMostAvailable,
+    "least_pending": DistributeLeastPending,
+    "sla_feasible_carbon": SLAFeasibleCarbonPolicy,
+    "edf_sla_carbon": SLAFeasibleCarbonPolicy,
+    "nsga2_surrogate": NSGA2BatchPolicy,
+    "queue_nsga2": QueueAwareFull,
+    "queue_nsga2_with_transit": QueueAwareWithTransit,
+    "queue_nsga2_indexed_transit": QueueAwareIndexedTransit,
+    "queue_nsga2_lagged_pue": QueueAwareLaggedPUE,
+    "queue_nsga2_lagged_pue_front_taskwise": QueueAwareLaggedPUEFrontTaskwise,
+    "queue_nsga2_lagged_pue_known_queue": QueueAwareLaggedPUEKnownQueue,
+    "queue_nsga2_lagged_pue_shadow_guard": QueueAwareLaggedPUEShadowGuard,
+    "queue_nsga2_adaptive_transit": QueueAwareCongestionAdaptive,
+    "queue_nsga2_front_carbon_risk": QueueAwareFrontCarbonRisk,
+    "queue_nsga2_front_carbon_taskwise": QueueAwareFrontCarbonTaskwise,
+    "queue_nsga2_carbon_guard": QueueAwareCarbonGuard,
+    "queue_nsga2_carbon_sla_guard": QueueAwareCarbonSlaGuard,
+    "queue_nsga2_no_queue": QueueAblationNoQueue,
+    "queue_nsga2_no_transfer": QueueAblationNoTransferCost,
+}
+
+
+def choose_actions(policy, tasks, datacenters):
+    """Adapt numeric DC IDs returned by upstream policies to 1-based action slots.
+
+    All policies use one explicit fallback when the original selector returns
+    None: route to task origin (or smallest-id DC if origin is missing).
+    Do not claim that this fallback is the same as original RBC behavior.
+    """
+    dcs = list(datacenters.values())
+    if not dcs:
+        if tasks:
+            raise ValueError("No data centers available for nonempty task list")
+        return [], 0
+    id_to_action = {dc.dc_id: idx + 1 for idx, dc in enumerate(dcs)}
+    if len(id_to_action) != len(dcs):
+        raise ValueError("Duplicate numerical DC IDs")
+    first_id = min(id_to_action)
+    actions = []
+    fallbacks = 0
+    for task in tasks:
+        selected = policy(task, datacenters, logger=None)
+        if selected not in id_to_action:
+            fallbacks += 1
+            selected = task.origin_dc_id if task.origin_dc_id in id_to_action else first_id
+        actions.append(id_to_action[selected])
+    assert len(actions) == len(tasks)
+    return actions, fallbacks
+
+
+def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_capacity_scale=1.0, start_month=None, start_day=None, prediction_records=None, facility_records=None):
+    if policy_name not in POLICIES:
+        raise ValueError(f"Unknown baseline: {policy_name}")
+    if not 0 < cpu_capacity_scale <= 1:
+        raise ValueError("CPU capacity scale must be within (0,1]")
+    if (start_month is None) != (start_day is None):
+        raise ValueError("start_month and start_day must be specified together")
+    if steps < 1 or drain_steps < 0 or steps + drain_steps > 7 * 24 * 4:
+        raise ValueError("steps must be positive, drain nonnegative, total <= 672")
+    # Current trace loader uses module-level PRNGs. Reseed before each policy to
+    # avoid contamination from the preceding policy's random suffixes.
+    random.seed(seed)
+    np.random.seed(seed)
+    config = copy.deepcopy(yaml.safe_load(
+        (ROOT / "configs/env/sim_config.yaml").read_text(encoding="utf8")
+    ))
+    sim = config["simulation"]
+    if start_month is not None:
+        date(int(sim["year"]), int(start_month), int(start_day))
+        sim["month"] = int(start_month)
+        sim["init_day"] = int(start_day)
+    sim.update({
+        "strategy": "manual_rl", "single_action_mode": False,
+        "disable_defer_action": False, "shuffle_datacenters": False,
+        "use_tensorboard": False,
+    })
+    dc_cfg = copy.deepcopy(yaml.safe_load(
+        (ROOT / "configs/env/datacenters.yaml").read_text(encoding="utf8")
+    ))
+    for dc_cfg_row in dc_cfg["datacenters"]:
+        original = int(dc_cfg_row["total_cores"])
+        dc_cfg_row["total_cores"] = max(1, int(round(original * cpu_capacity_scale)))
+    with tempfile.TemporaryDirectory() as temp:
+        cfgpath = Path(temp) / "sim_config.yaml"
+        dcpath = Path(temp) / "dc_config.yaml"
+        dcpath.write_text(yaml.safe_dump(dc_cfg), encoding="utf8")
+        cfgpath.write_text(yaml.safe_dump(config), encoding="utf8")
+        env = make_env(
+            str(cfgpath), str(dcpath),
+            str(ROOT / "configs/env/reward_config.yaml"),
+            writer=None, logger=None,
+        )
+        assert env.single_action_mode is False
+        assert env.disable_defer_action is False
+        assert env.cluster_manager.strategy == "manual_rl"
+        # Upstream factory uses month*30.5+day for simulator-local site traces.
+        # Correct ONLY overflowed dates, preserving every previous benchmark.
+        site_index, site_index_corrected = correct_overflowed_init_day(
+            int(env.cluster_manager.init_day),
+            year=int(sim["year"]), month=int(sim["month"]), day=int(sim["init_day"]),
+        )
+        env.cluster_manager.init_day = site_index
+        env.reset(seed=seed)
+        # Prevent fresh admissions after a fixed horizon, without modifying
+        # upstream data loaders or reward/environment physics. Drain can then
+        # finish already-admitted tasks under a COMMON cutoff for all policies.
+        if drain_steps:
+            cutoff = env.start_time + env.time_step * steps
+            upstream_loader = env.cluster_manager.get_tasks_for_timestep
+            def admitted_only(time):
+                return [] if time >= cutoff else upstream_loader(time)
+            env.cluster_manager.get_tasks_for_timestep = admitted_only
+        policy = (POLICIES[policy_name](seed=seed) if issubclass(POLICIES[policy_name], NSGA2BatchPolicy) else POLICIES[policy_name]())
+        policy.reset()
+        summary = {
+            "policy": policy_name, "routing": "shared_action_path_local_immediate_v2",
+            "seed": seed, "steps_requested": steps, "steps_completed": 0,
+            "scenario_start_month": int(sim["month"]),
+            "scenario_start_day": int(sim["init_day"]),
+            "cpu_capacity_scale": cpu_capacity_scale,
+            "site_init_day_index": site_index,
+            "site_init_day_corrected": site_index_corrected,
+            "admission_steps": steps, "drain_steps": drain_steps,
+            "tasks_seen": 0, "tasks_dispatched": 0,
+            "local_dispatches": 0, "remote_dispatches": 0,
+            "tasks_started": 0, "tasks_finished": 0,
+            "sla_met": 0, "sla_violated": 0,
+            "fallback_assignments": 0,
+            "facility_energy_kwh": 0.0,
+            "facility_cost_usd": 0.0,
+            "facility_carbon_kg": 0.0,
+            "transmission_cost_usd": 0.0,
+            "transmission_energy_kwh": 0.0,
+            "transmission_carbon_kg": 0.0,
+            "pending_last": 0, "running_last": 0,
+            "in_transit_last": 0, "undispatched_at_horizon": 0,
+        }
+        # Perf-counter is observational; measure only nonempty dispatch decisions,
+        # excluding environment.step(), workload loading and test audits.
+        probe_arm=policy_name.removeprefix("probe_") if policy_name.startswith("probe_") else None
+        probe_checked=False
+        probe_meta=None
+        planner_dispatch_calls = 0
+        planner_dispatch_seconds = 0.0
+        planner_dispatch_max_seconds = 0.0
+        planner_batch_seconds = []
+        planner_batch_sizes = []
+        seen = set()
+        dispatched = set()
+        finished = set()
+        for step_index in range(steps + drain_steps):
+            if policy_name == "edf_sla_carbon":
+                # EDF is a priority rule, not just a destination rule: modifying
+                # the task order changes arrival order in shared DC queues.
+                env.current_tasks.sort(key=lambda t: (t.sla_deadline, t.arrival_time))
+            tasks = list(env.current_tasks)
+            for task in tasks:
+                seen.add(task)
+            if hasattr(policy, "set_context"):
+                policy.set_context(env.current_time, env.cluster_manager)
+            if hasattr(policy, "set_in_transit"):
+                policy.set_in_transit(env.in_transit_tasks, env.cluster_manager.datacenters)
+            dispatch_t0 = time.perf_counter() if tasks else None
+            if hasattr(policy, "select_batch"):
+                acts, fallbacks = policy.select_batch(tasks, env.cluster_manager.datacenters)
+            else:
+                acts, fallbacks = choose_actions(
+                    policy, tasks, env.cluster_manager.datacenters
+                )
+            if probe_arm is not None and tasks and not probe_checked:
+                # Only the first nonempty dispatch batch is eligible. Every
+                # later decision executes the unmodified base round-robin.
+                probe_checked=True
+                acts,probe_meta=first_batch_probe(
+                    tasks,acts,list(env.cluster_manager.datacenters.values()),
+                    arm=probe_arm)
+            if dispatch_t0 is not None:
+                decision_seconds = time.perf_counter() - dispatch_t0
+                planner_dispatch_calls += 1
+                planner_batch_seconds.append(decision_seconds)
+                planner_batch_sizes.append(len(tasks))
+                planner_dispatch_seconds += decision_seconds
+                planner_dispatch_max_seconds = max(
+                    planner_dispatch_max_seconds, decision_seconds
+                )
+            summary["fallback_assignments"] += fallbacks
+            dc_order = list(env.cluster_manager.datacenters.values())
+            for task, action in zip(tasks, acts):
+                if dc_order[action - 1].dc_id == task.origin_dc_id:
+                    summary["local_dispatches"] += 1
+                else:
+                    summary["remote_dispatches"] += 1
+            dispatched.update(tasks)
+            _, _, terminated, truncated, info = env.step(acts)
+            # Post-step outputs are NOT available to the decision that just ran.
+            # This observation can only influence the NEXT loop iteration.
+            if hasattr(policy, "observe_facility_after_step"):
+                policy.observe_facility_after_step(
+                    info["datacenter_infos"], env.cluster_manager.datacenters
+                )
+            summary["steps_completed"] += 1
+            pending = 0
+            for dc_name, dc_info in info["datacenter_infos"].items():
+                if facility_records is not None:
+                    facility_records.append(facility_cell(
+                        seed=seed, policy=policy_name, step_index=step_index,
+                        dc_name=dc_name, dc_info=dc_info))
+                validate_datacenter_step(dc_info)
+                c = dc_info["__common__"]
+                summary["facility_energy_kwh"] += float(c["energy_consumption_kwh"])
+                summary["facility_cost_usd"] += float(c["energy_cost_USD"])
+                summary["facility_carbon_kg"] += float(c["carbon_emissions_kg"])
+                summary["tasks_started"] += int(c["tasks_assigned"])
+                summary["tasks_finished"] += int(c["finished_tasks_count"])
+                summary["sla_met"] += int(c["__sla__"]["met"])
+                summary["sla_violated"] += int(c["__sla__"]["violated"])
+                finished.update(c["tasks_finished_this_step_objects"])
+                pending += int(c["pending_tasks"])
+            summary["transmission_cost_usd"] += float(info["transmission_cost_total_usd"])
+            # NB upstream info keys are misnamed: "total_energy_kwh" and
+            # "total_emissions_kg" contain ONLY the transfer contributions.
+            summary["transmission_energy_kwh"] += float(info["total_energy_kwh"])
+            summary["transmission_carbon_kg"] += float(info["total_emissions_kg"])
+            summary["pending_last"] = pending
+            if terminated or truncated:
+                break
+        pending_tasks = [
+            task for dc in env.cluster_manager.datacenters.values()
+            for task in dc.pending_tasks
+        ]
+        running_tasks = [
+            task for dc in env.cluster_manager.datacenters.values()
+            for task in dc.running_tasks
+        ]
+        transit_tasks = [task for _, task, _ in env.in_transit_tasks]
+        audit = audit_lifecycle(dispatched, finished, pending_tasks, running_tasks, transit_tasks)
+        summary["lifecycle_conserved"] = True
+        summary["unfinished_overdue_at_horizon"] = sum(
+            task.sla_deadline < env.current_time
+            for task in dispatched - finished
+        )
+        summary["remaining_observation_tasks"] = len(env.current_tasks)
+        independent_sla, task_rows = analyze_finished_tasks(finished, env.current_time)
+        assert independent_sla["task_audit_completed"] == summary["tasks_finished"]
+        assert independent_sla["task_audit_violated"] == summary["sla_violated"]
+        assert independent_sla["task_audit_completed"] - independent_sla["task_audit_violated"] == summary["sla_met"]
+        summary.update(independent_sla)
+        if getattr(policy, "queue_aware", False):
+            forecast_metrics, rows = audit_forecasts(
+                finished, policy.predicted_start_by_task,
+                seed=seed, policy=policy_name
+            )
+            summary.update(forecast_metrics)
+            if prediction_records is not None:
+                for record in rows:
+                    prediction_records.append({
+                        "scenario_start_month": int(sim["month"]),
+                        "scenario_start_day": int(sim["init_day"]),
+                        **record
+                    })
+        if completed_records is not None:
+            for row in task_rows:
+                completed_records.append({"policy": policy_name, "seed": seed, **row})
+        summary["probe_intervention"] = probe_meta
+        summary.update(summarize_dispatch_latency(
+            planner_batch_seconds, planner_batch_sizes
+        ))
+        assert summary["planner_dispatch_calls"] == planner_dispatch_calls
+        assert abs(summary["planner_dispatch_seconds"] - planner_dispatch_seconds) < 1e-8
+        assert abs(summary["planner_dispatch_max_ms"] - planner_dispatch_max_seconds * 1000) < 1e-8
+        summary["nsga2_surrogate_evaluations"] = getattr(policy, "surrogate_evaluations", 0)
+        summary["nsga2_evaluation_requests"] = getattr(policy, "evaluation_requests", 0)
+        summary["known_queue_baseline_calls"] = getattr(policy, "known_queue_baseline_calls", 0)
+        summary["known_queue_extra_calls"] = getattr(policy, "known_queue_extra_calls", 0)
+        summary["known_queue_projection_seconds"] = getattr(policy, "known_queue_projection_seconds", 0.0)
+        summary["known_queue_positive_penalty_calls"] = getattr(policy, "known_queue_positive_penalty_calls", 0)
+        summary["known_queue_selected_penalty_minutes"] = getattr(policy, "known_queue_selected_penalty_minutes", 0.0)
+        summary["known_queue_selected_positive_batches"] = getattr(policy, "known_queue_selected_positive_batches", 0)
+        summary["known_queue_selected_decisions"] = getattr(policy, "known_queue_selected_decisions", 0)
+        summary["shadow_evaluation_requests"] = getattr(policy, "shadow_evaluation_requests", 0)
+        summary["shadow_surrogate_evaluations"] = getattr(policy, "shadow_surrogate_evaluations", 0)
+        summary["total_nsga2_evaluation_requests"] = summary["nsga2_evaluation_requests"] + summary["shadow_evaluation_requests"]
+        summary["risk_guard_checks"] = getattr(policy, "risk_guard_checks", 0)
+        summary["risk_guard_reversions"] = getattr(policy, "risk_guard_reversions", 0)
+        summary["risk_guard_late_tasks"] = getattr(policy, "risk_guard_late_tasks", 0)
+        summary["risk_guard_blocked_route_changes"] = getattr(policy, "risk_guard_blocked_route_changes", 0)
+        summary["shadow_planner_projection_calls"] = getattr(policy, "shadow_planner_projection_calls", 0)
+        summary["shadow_planner_projection_seconds"] = getattr(policy, "shadow_planner_projection_seconds", 0.0)
+        summary["nsga2_batch_optimizations"] = getattr(policy, "optimizations", 0)
+        summary["carbon_guard_checks"] = getattr(policy, "carbon_guard_checks", 0)
+        summary["carbon_guard_interventions"] = getattr(policy, "carbon_guard_interventions", 0)
+        summary["carbon_guard_vetoes"] = getattr(policy, "carbon_guard_vetoes", 0)
+        summary["carbon_guard_extra_fitness_calls"] = getattr(policy, "carbon_guard_extra_fitness_calls", 0)
+        summary["front_carbon_selection_checks"] = getattr(policy, "front_carbon_selection_checks", 0)
+        summary["front_carbon_selection_changes"] = getattr(policy, "front_carbon_selection_changes", 0)
+        summary["planner_projection_calls"] = getattr(policy, "planner_projection_calls", 0)
+        summary["planner_projection_seconds"] = getattr(policy, "planner_projection_seconds", 0.0)
+        summary["adaptive_gate_seconds"] = getattr(policy, "adaptive_gate_seconds", 0.0)
+        if summary["planner_projection_calls"]:
+            assert summary["planner_projection_seconds"] >= 0
+            assert summary["adaptive_gate_seconds"] >= 0
+        summary["lagged_pue_observation_steps"] = getattr(policy, "lagged_pue_observation_steps", 0)
+        summary["lagged_pue_missing_site_readings"] = getattr(policy, "lagged_pue_missing_site_readings", 0)
+        summary["lagged_pue_nonunit_site_readings"] = getattr(policy, "lagged_pue_nonunit_site_readings", 0)
+        summary["lagged_pue_max"] = getattr(policy, "lagged_pue_max", 1.0)
+        summary["adaptive_projection_checks"] = getattr(policy, "adaptive_projection_checks", 0)
+        summary["adaptive_transit_projections"] = getattr(policy, "adaptive_transit_projections", 0)
+        summary["adaptive_base_projections"] = getattr(policy, "adaptive_base_projections", 0)
+        if summary["adaptive_projection_checks"]:
+            assert summary["adaptive_projection_checks"] == (summary["adaptive_transit_projections"] + summary["adaptive_base_projections"])
+        summary["tasks_seen"] = len(seen)
+        summary["tasks_dispatched"] = len(dispatched)
+        summary["in_transit_last"] = len(env.in_transit_tasks)
+        summary["running_last"] = sum(
+            len(dc.running_tasks) for dc in env.cluster_manager.datacenters.values()
+        )
+        summary["undispatched_at_horizon"] = len(env.current_tasks)
+        summary["unfinished_dispatched"] = len(dispatched - finished)
+        summary["completion_fraction"] = (
+            summary["tasks_finished"] / summary["tasks_dispatched"]
+            if summary["tasks_dispatched"] else None
+        )
+        summary["fallback_fraction"] = (
+            summary["fallback_assignments"] / summary["tasks_dispatched"]
+            if summary["tasks_dispatched"] else None
+        )
+        summary["fully_drained"] = summary["unfinished_dispatched"] == 0
+        summary["eligible_for_full_cohort_comparison"] = (
+            summary["fully_drained"]
+            and (summary["fallback_fraction"] or 0.0) <= 0.05
+        )
+        summary["reported_total_cost_usd"] = (
+            summary["facility_cost_usd"] + summary["transmission_cost_usd"]
+        )
+        summary["reported_total_carbon_kg"] = (
+            summary["facility_carbon_kg"] + summary["transmission_carbon_kg"]
+        )
+        # At this stage these are accounting consistency checks, not scientific
+        # proof that energy/carbon models match physical reality.
+        assert summary["steps_completed"] == steps + drain_steps, summary
+        assert summary["sla_met"] + summary["sla_violated"] == summary["tasks_finished"], summary
+        assert summary["tasks_finished"] == len(finished), "duplicate completion counted"
+        assert summary["tasks_finished"] <= summary["tasks_started"] <= len(dispatched), summary
+        assert summary["local_dispatches"] + summary["remote_dispatches"] == summary["tasks_dispatched"], summary
+        assert audit["dispatched"] == summary["tasks_dispatched"], summary
+        assert audit["finished"] == summary["tasks_finished"], summary
+        assert audit["pending"] == summary["pending_last"], summary
+        assert audit["running"] == summary["running_last"], summary
+        assert audit["in_transit"] == summary["in_transit_last"], summary
+        assert summary["tasks_started"] == summary["tasks_finished"] + summary["running_last"], summary
+        assert summary["tasks_dispatched"] == summary["tasks_finished"] + summary["pending_last"] + summary["running_last"] + summary["in_transit_last"], summary
+        if drain_steps:
+            assert not env.current_tasks, "new tasks still admitted after cutoff"
+        for key in (
+            "facility_energy_kwh", "facility_cost_usd", "facility_carbon_kg",
+            "transmission_cost_usd", "transmission_energy_kwh",
+            "transmission_carbon_kg",
+        ):
+            assert np.isfinite(summary[key]), (key, summary)
+            assert summary[key] >= -1e-8, (key, summary)
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
+        return summary
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--steps", type=int, default=16)
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--drain-steps", type=int, default=0)
+    p.add_argument("--cpu-capacity-scale", type=float, default=1.0)
+    p.add_argument("--start-month", type=int)
+    p.add_argument("--start-day", type=int)
+    p.add_argument(
+        "--policies", nargs="+", choices=sorted(POLICIES), 
+        default=["lowest_carbon", "lowest_price", "round_robin"]
+    )
+    p.add_argument("--output", type=Path, default=ROOT / "research/results/unified_baseline_smoke.json")
+    args = p.parse_args()
+    out = [run(policy, args.seed, args.steps, drain_steps=args.drain_steps, cpu_capacity_scale=args.cpu_capacity_scale, start_month=args.start_month, start_day=args.start_day) for policy in args.policies]
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(out, indent=2, allow_nan=False), encoding="utf8")
+    print(json.dumps(out, indent=2, allow_nan=False))
+
+
+if __name__ == "__main__":
+    main()

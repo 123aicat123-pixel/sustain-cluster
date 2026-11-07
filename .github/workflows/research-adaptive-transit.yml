@@ -1,0 +1,114 @@
+name: Research congestion-adaptive transit queue ablation
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - "research/queue_aware_nsga2.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/tests/test_congestion_adaptive_transit.py"
+      - "research/adaptive_overhead_audit.py"
+      - "research/planner_overhead_audit.py"
+      - "research/batch_metrics.py"
+      - "research/tests/test_adaptive_overhead_audit.py"
+      - ".github/workflows/research-adaptive-transit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adaptive-pilot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - {name: june15_05, month: 6, day: 15, scale: "0.05"}
+          - {name: may19_10, month: 5, day: 19, scale: "0.10"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install upstream simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract bundled Alibaba workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Assert capacity gate and existing queue contracts
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_congestion_adaptive_transit.py' -v 2>&1 | tee research/results/adaptive_tests.log
+          python -m unittest discover -s research/tests -p 'test_transit_queue_projection.py' -v 2>&1 | tee research/results/adaptive_existing_tests.log
+          python -m unittest discover -s research/tests -p 'test_adaptive_overhead_audit.py' -v 2>&1 | tee research/results/adaptive_overhead_tests.log
+      - name: Run paired full simulations on EXPLORATORY dates
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --start-month ${{ matrix.scenario.month }} \
+            --start-day ${{ matrix.scenario.day }} \
+            --cpu-capacity-scale ${{ matrix.scenario.scale }} \
+            --seeds 901 1701 \
+            --policies queue_nsga2 queue_nsga2_with_transit queue_nsga2_adaptive_transit \
+            --output-prefix "research/results/adaptive_${{ matrix.scenario.name }}" \
+            2>&1 | tee "research/results/adaptive_${{ matrix.scenario.name }}.log"
+      - name: Check task pairing, physical outcomes and gate accounting
+        run: |
+          python - <<'PY'
+          import csv,json
+          from pathlib import Path
+          stem="research/results/adaptive_${{ matrix.scenario.name }}"
+          data=json.loads(Path(stem+".json").read_text())
+          assert len(data)==6
+          for seed in [901,1701]:
+              group=[r for r in data if r["seed"]==seed]
+              assert len(group)==3
+              assert len({r["tasks_dispatched"] for r in group})==1
+              assert all(r["fully_drained"] and r["fallback_assignments"]==0 and r["lifecycle_conserved"] for r in group)
+              for r in group:
+                  assert r["tasks_finished"]==r["tasks_dispatched"]
+                  assert r["forecast_count"]==r["tasks_finished"]
+              adapt=next(r for r in group if r["policy"]=="queue_nsga2_adaptive_transit")
+              assert adapt["adaptive_projection_checks"]>0
+              assert adapt["adaptive_projection_checks"]==adapt["adaptive_transit_projections"]+adapt["adaptive_base_projections"]
+              print(seed,"adaptive checks",adapt["adaptive_projection_checks"],
+                    "transit",adapt["adaptive_transit_projections"],
+                    "base",adapt["adaptive_base_projections"])
+              for r in group:
+                  print(seed,r["policy"],"sla",r["sla_violated"],
+                        "carbon_kg",r["reported_total_carbon_kg"],
+                        "cost_usd",r["reported_total_cost_usd"],
+                        "mae",r["forecast_mae_minutes"],
+                        "planning_ms_mean",r["planner_dispatch_mean_ms"],
+                        "planning_ms_max",r["planner_dispatch_max_ms"])
+          with open(stem+"_completed_tasks.csv",newline="") as f:
+              rows=list(csv.DictReader(f))
+          from research.paired_task_analysis import compare_task_rows
+          paired=compare_task_rows(rows,reference="queue_nsga2")
+          assert len(paired)==4
+          other=compare_task_rows(rows,reference="queue_nsga2_with_transit")
+          assert len(other)==4
+          for item in other:
+              if item["policy"]=="queue_nsga2_adaptive_transit":
+                  print("Adaptive vs full transit:",json.dumps(item,sort_keys=True))
+          Path(stem+"_paired.json").write_text(
+              json.dumps({"versus_queue":paired,"versus_transit":other},indent=2)+"\n")
+          PY
+      - name: Audit matched adaptive planner overhead versus actual SLA and carbon
+        run: |
+          set -o pipefail
+          python -m research.adaptive_overhead_audit \
+            --input "research/results/adaptive_${{ matrix.scenario.name }}.json" \
+            --output "research/results/adaptive_${{ matrix.scenario.name }}_overhead_audit.json" \
+            2>&1 | tee "research/results/adaptive_${{ matrix.scenario.name }}_overhead_audit.log"
+      - name: Archive all simulated results, failed tests and raw tasks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-transit-${{ matrix.scenario.name }}
+          path: research/results/adaptive_*
+          retention-days: 90
+          if-no-files-found: warn

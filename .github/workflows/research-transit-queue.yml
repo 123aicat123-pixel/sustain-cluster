@@ -1,0 +1,83 @@
+name: Research transit-aware queue predictor falsification
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-transit-queue.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/research-transit-queue.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transit-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install full upstream dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Load archived Alibaba workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Test queue projection and fixed NSGA-II contract
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_transit_queue_projection.py' -v 2>&1 | tee research/results/transit_queue_unit.log
+      - name: Compare matched policies on June 15 under 5pct CPU capacity
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --seeds 501 733 \
+            --start-month 6 --start-day 15 \
+            --cpu-capacity-scale 0.05 \
+            --policies queue_nsga2 queue_nsga2_with_transit \
+            --output-prefix research/results/transit_queue_jun15 \
+            2>&1 | tee research/results/transit_queue_jun15.log
+      - name: Independently audit paired task outcomes
+        run: |
+          set -o pipefail
+          python -m research.paired_task_analysis \
+            --input research/results/transit_queue_jun15_completed_tasks.csv \
+            --reference queue_nsga2 \
+            --output research/results/transit_queue_jun15_pairs.json \
+            2>&1 | tee research/results/transit_queue_jun15_pairs.log
+      - name: Verify cohort integrity and forecast errors
+        run: |
+          python - <<'PY'
+          import json
+          data=json.load(open('research/results/transit_queue_jun15.json',encoding='utf8'))
+          assert len(data)==4
+          for seed in (501,733):
+              cohort=[r for r in data if r['seed']==seed]
+              assert len(cohort)==2
+              assert len({r['tasks_dispatched'] for r in cohort})==1
+              assert all(r['fully_drained'] and r['fallback_assignments']==0 for r in cohort)
+              for row in cohort:
+                  assert row['forecast_count']==row['tasks_finished']
+                  assert row['forecast_actual_sla_misses']==row['sla_violated']
+                  assert row['lifecycle_conserved']
+                  print(seed,row['policy'],
+                        'MAE-min',row['forecast_mae_minutes'],
+                        'false-safe',row['forecast_false_safe_count'],
+                        'SLA-misses',row['sla_violated'],
+                        'cost',row['reported_total_cost_usd'],
+                        'carbon',row['reported_total_carbon_kg'])
+          print('Interpretation: 2-seed, single-date mechanism test only.')
+          PY
+      - name: Archive actual outcomes and timestamp predictions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: transit-aware-queue-prediction-pilot
+          path: research/results/transit_queue_*
+          retention-days: 90
+          if-no-files-found: warn

@@ -1,0 +1,123 @@
+name: Research PUE known-queue externality one-search pilot
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-lagged-pue-known-queue.yml"
+      - "research/known_queue_externality.py"
+      - "research/queue_aware_nsga2.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/tests/test_lagged_pue_known_queue.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  known-queue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - {name: jan20_05, month: 1, day: 20, scale: "0.05"}
+          - {name: apr15_05, month: 4, day: 15, scale: "0.05"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator requirements
+        run: python -m pip install -r requirements.txt
+      - name: Unpack Alibaba workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Validate counterfactual penalty and cache
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_known_queue_externality.py' -v 2>&1 | tee research/results/known_queue_predictor.log
+          python -m unittest discover -s research/tests -p 'test_lagged_pue_known_queue.py' -v 2>&1 | tee research/results/known_queue_fitness.log
+      - name: Matched full simulation
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --start-month ${{ matrix.scenario.month }} --start-day ${{ matrix.scenario.day }} \
+            --cpu-capacity-scale ${{ matrix.scenario.scale }} --seeds 901 1701 \
+            --policies queue_nsga2_indexed_transit queue_nsga2_lagged_pue queue_nsga2_lagged_pue_known_queue \
+            --output-prefix research/results/known_queue_${{ matrix.scenario.name }} \
+            2>&1 | tee research/results/known_queue_${{ matrix.scenario.name }}.log
+      - name: Audit signed real-simulator SLA, carbon and compute costs
+        run: |
+          set -o pipefail
+          python - <<'PY'
+          import csv,json,math
+          from pathlib import Path
+          from research.planner_overhead_audit import audit_planner_rows
+          from research.paired_task_analysis import compare_task_rows
+          stem="research/results/known_queue_${{ matrix.scenario.name }}"
+          runs=json.loads(Path(stem+".json").read_text())
+          with open(stem+"_completed_tasks.csv",newline="") as fp:
+              tasks=list(csv.DictReader(fp))
+          report=[]
+          names={"queue_nsga2_indexed_transit","queue_nsga2_lagged_pue","queue_nsga2_lagged_pue_known_queue"}
+          for seed in (901,1701):
+              cohort=[r for r in runs if int(r["seed"])==seed]
+              assert len(cohort)==3 and {r["policy"] for r in cohort}==names
+              audit_planner_rows(cohort)
+              by={r["policy"]:r for r in cohort}
+              baseline=by["queue_nsga2_indexed_transit"]
+              pue=by["queue_nsga2_lagged_pue"]
+              new=by["queue_nsga2_lagged_pue_known_queue"]
+              taskwise=compare_task_rows(
+                  [t for t in tasks if int(t["seed"])==seed],
+                  reference="queue_nsga2_indexed_transit")
+              assert {x["policy"] for x in taskwise}==names-{"queue_nsga2_indexed_transit"}
+              req=int(baseline["nsga2_evaluation_requests"])
+              assert req>0 and all(int(x["nsga2_evaluation_requests"])==req for x in cohort)
+              assert all(int(x["shadow_evaluation_requests"])==0 for x in cohort)
+              assert all(int(x["total_nsga2_evaluation_requests"])==req for x in cohort)
+              assert int(new["known_queue_selected_decisions"])==int(new["planner_dispatch_calls"])
+              assert int(new["known_queue_selected_decisions"])>0
+              assert 0<=int(new["known_queue_selected_positive_batches"])<=int(new["known_queue_selected_decisions"])
+              assert math.isfinite(float(new["known_queue_selected_penalty_minutes"]))
+              assert float(new["known_queue_selected_penalty_minutes"])>=0
+              assert int(new["known_queue_extra_calls"])>0
+              assert 0<int(new["known_queue_baseline_calls"])<=int(new["known_queue_extra_calls"])
+              assert 0<=int(new["known_queue_positive_penalty_calls"])<=int(new["known_queue_extra_calls"])
+              extra=float(new["known_queue_projection_seconds"])
+              assert math.isfinite(extra) and 0<extra<=float(new["planner_dispatch_seconds"])
+              assert all(math.isfinite(float(row[key])) for row in cohort for key in
+                  ("reported_total_carbon_kg","reported_total_cost_usd","planner_dispatch_p95_ms"))
+              item={
+                "seed":seed,"tasks":int(new["tasks_finished"]),
+                "known_baseline_calls":int(new["known_queue_baseline_calls"]),
+                "known_extra_calls":int(new["known_queue_extra_calls"]),
+                "positive_penalty_calls":int(new["known_queue_positive_penalty_calls"]),
+                "known_projection_seconds":extra,
+                "selected_known_tardiness_minutes":float(new["known_queue_selected_penalty_minutes"]),
+                "selected_risk_positive_batches":int(new["known_queue_selected_positive_batches"]),
+                "sla_delta_vs_indexed":int(new["sla_violated"])-int(baseline["sla_violated"]),
+                "sla_delta_vs_pue":int(new["sla_violated"])-int(pue["sla_violated"]),
+                "carbon_delta_vs_indexed_kg":new["reported_total_carbon_kg"]-baseline["reported_total_carbon_kg"],
+                "carbon_delta_vs_pue_kg":new["reported_total_carbon_kg"]-pue["reported_total_carbon_kg"],
+                "p95_delta_vs_pue_ms":new["planner_dispatch_p95_ms"]-pue["planner_dispatch_p95_ms"],
+                "nsga2_requests":req,
+                "joint_nonworse_vs_indexed":(new["reported_total_carbon_kg"]<=baseline["reported_total_carbon_kg"]
+                                            and new["sla_violated"]<=baseline["sla_violated"])
+              }
+              print(json.dumps(item,sort_keys=True))
+              report.append(item)
+          Path(stem+"_audit.json").write_text(json.dumps(report,indent=2,allow_nan=False)+"\n")
+          PY
+      - name: Retain raw results and unsuccessful runs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: known-queue-pue-${{ matrix.scenario.name }}
+          path: |
+            research/results/known_queue_*
+          retention-days: 90
+          if-no-files-found: warn

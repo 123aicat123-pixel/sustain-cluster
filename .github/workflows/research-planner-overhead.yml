@@ -1,0 +1,60 @@
+name: Research planner overhead benchmark
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-planner-overhead.yml"
+      - "research/planner_latency.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/batch_unified_baselines.py"
+      - "research/tests/test_planner_latency.py"
+      - "research/tests/test_planner_batch_summary.py"
+      - "research/tests/test_planner_overhead_audit.py"
+      - "research/planner_overhead_audit.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  planner-overhead:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Extract Alibaba workload
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Unit contracts for timing summaries
+        run: |
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_planner*.py' -v 2>&1 | tee research/results/planner_overhead_unit.log
+      - name: Matched single-host planner latency smoke
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --start-month 5 --start-day 19 \
+            --cpu-capacity-scale 0.05 \
+            --seeds 901 \
+            --policies sla_feasible_carbon queue_nsga2 queue_nsga2_with_transit \
+            --output-prefix research/results/planner_overhead \
+            2>&1 | tee research/results/planner_overhead.log
+      - name: Enforce nonempty timing and budget metrics
+        run: |
+          python -m research.planner_overhead_audit \
+            --input research/results/planner_overhead.json \
+            --output research/results/planner_overhead_audit.json
+      - name: Retain timing, simulator results, and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-planner-overhead
+          path: research/results/planner_overhead*
+          retention-days: 90
+          if-no-files-found: warn
