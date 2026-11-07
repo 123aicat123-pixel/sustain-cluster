@@ -1,0 +1,116 @@
+name: Research single-search PUE taskwise Pareto front ablation
+
+on:
+  push:
+    branches: [research-baselines]
+    paths:
+      - ".github/workflows/research-pue-front-taskwise.yml"
+      - "research/queue_aware_nsga2.py"
+      - "research/unified_baseline_smoke.py"
+      - "research/tests/test_lagged_pue_front_taskwise.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pue-front:
+    runs-on: ubuntu-latest
+    timeout-minutes: 105
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - {name: jan20_05, month: 1, day: 20, scale: "0.05"}
+          - {name: apr15_05, month: 4, day: 15, scale: "0.05"}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install simulator dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Unpack Alibaba trace
+        run: unzip -n data/workload/alibaba_2020_dataset/result_df_full_year_2020.zip -d data/workload/alibaba_2020_dataset/
+      - name: Unit contracts for single-search front
+        run: |
+          set -o pipefail
+          mkdir -p research/results
+          python -m unittest discover -s research/tests -p 'test_lagged_pue_front_taskwise.py' -v 2>&1 | tee research/results/pue_front_unit.log
+      - name: Same-cohort four-policy development benchmark
+        run: |
+          set -o pipefail
+          python -m research.batch_unified_baselines \
+            --steps 16 --drain-steps 112 \
+            --start-month ${{ matrix.scenario.month }} --start-day ${{ matrix.scenario.day }} \
+            --cpu-capacity-scale ${{ matrix.scenario.scale }} --seeds 901 1701 \
+            --policies queue_nsga2_indexed_transit queue_nsga2_lagged_pue queue_nsga2_lagged_pue_front_taskwise queue_nsga2_lagged_pue_shadow_guard \
+            --output-prefix research/results/pue_front_${{ matrix.scenario.name }} \
+            2>&1 | tee research/results/pue_front_${{ matrix.scenario.name }}.log
+      - name: Audit matching cohorts, search budgets, signed physical outcomes
+        run: |
+          set -o pipefail
+          python - <<'PY'
+          import csv,json
+          from pathlib import Path
+          from research.planner_overhead_audit import audit_planner_rows
+          from research.paired_task_analysis import compare_task_rows
+          stem="research/results/pue_front_${{ matrix.scenario.name }}"
+          data=json.loads(Path(stem+".json").read_text())
+          with open(stem+"_completed_tasks.csv",newline="") as f:
+              tasks=list(csv.DictReader(f))
+          report=[]
+          expected_names={
+             "queue_nsga2_indexed_transit","queue_nsga2_lagged_pue",
+             "queue_nsga2_lagged_pue_front_taskwise",
+             "queue_nsga2_lagged_pue_shadow_guard"}
+          for seed in (901,1701):
+              cohort=[r for r in data if int(r["seed"])==seed]
+              assert len(cohort)==4 and {r["policy"] for r in cohort}==expected_names
+              audit_planner_rows(cohort)
+              by={r["policy"]:r for r in cohort}
+              base=by["queue_nsga2_indexed_transit"]
+              plain=by["queue_nsga2_lagged_pue"]
+              front=by["queue_nsga2_lagged_pue_front_taskwise"]
+              shadow=by["queue_nsga2_lagged_pue_shadow_guard"]
+              req=int(base["nsga2_evaluation_requests"])
+              assert req>0
+              assert all(int(x["nsga2_evaluation_requests"])==req for x in cohort)
+              assert int(front["shadow_evaluation_requests"])==0
+              assert int(front["total_nsga2_evaluation_requests"])==req
+              assert int(shadow["shadow_evaluation_requests"])==req
+              assert int(shadow["total_nsga2_evaluation_requests"])==2*req
+              assert front["front_carbon_selection_checks"]>0
+              assert 0<=front["front_carbon_selection_changes"]<=front["front_carbon_selection_checks"]
+              assert front["lagged_pue_observation_steps"]==front["steps_completed"]
+              pair=compare_task_rows(
+                  [t for t in tasks if int(t["seed"])==seed],
+                  reference="queue_nsga2_indexed_transit")
+              assert {p["policy"] for p in pair}==expected_names-{"queue_nsga2_indexed_transit"}
+              item={
+                 "seed":seed,
+                 "tasks":int(front["tasks_finished"]),
+                 "front_changes":int(front["front_carbon_selection_changes"]),
+                 "front_sla_minus_indexed":int(front["sla_violated"])-int(base["sla_violated"]),
+                 "front_sla_minus_pue":int(front["sla_violated"])-int(plain["sla_violated"]),
+                 "front_carbon_minus_indexed_kg":front["reported_total_carbon_kg"]-base["reported_total_carbon_kg"],
+                 "front_carbon_minus_pue_kg":front["reported_total_carbon_kg"]-plain["reported_total_carbon_kg"],
+                 "front_p95_ms":front["planner_dispatch_p95_ms"],
+                 "indexed_p95_ms":base["planner_dispatch_p95_ms"],
+                 "shadow_p95_ms":shadow["planner_dispatch_p95_ms"],
+                 "front_total_requests":req,
+                 "shadow_total_requests":2*req
+              }
+              report.append(item)
+              print(json.dumps(item,sort_keys=True))
+          Path(stem+"_audit.json").write_text(json.dumps(report,indent=2,allow_nan=False)+"\n")
+          PY
+      - name: Archive all raw, adverse and censored experiments
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pue-front-taskwise-${{ matrix.scenario.name }}
+          path: |
+            research/results/pue_front_*
+          retention-days: 90
+          if-no-files-found: warn
