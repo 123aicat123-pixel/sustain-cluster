@@ -317,7 +317,9 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
                 tardiness += max(0.0, delay)
                 missed_deadlines += int(delay > 1e-9)
             if getattr(self, "known_queue_externality_enabled", False):
-                tardiness += self._known_queue_penalty(dcs, arrivals, now)
+                externality = self._known_queue_penalty(dcs, arrivals, now)
+                self._known_queue_candidate_penalties[tuple(chrom)] = externality
+                tardiness += externality
             predicted_miss_counts[tuple(chrom)] = missed_deadlines
             predicted_finishes[tuple(chrom)] = tuple(finishes)
             return cost, carbon, tardiness
@@ -356,6 +358,14 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
                 )
             self.carbon_guard_extra_fitness_calls += 2
             self.carbon_guard_interventions += int(intervened)
+        if getattr(self, "known_queue_externality_enabled", False):
+            key = tuple(chromosome)
+            if key not in self._known_queue_candidate_penalties:
+                raise AssertionError("selected chromosome missing known-queue risk audit")
+            selected_penalty = self._known_queue_candidate_penalties[key]
+            self.known_queue_selected_penalty_minutes += selected_penalty
+            self.known_queue_selected_positive_batches += int(selected_penalty > 0)
+            self.known_queue_selected_decisions += 1
         self.optimizations += 1
         self.surrogate_evaluations += metrics["surrogate_evaluations"]
         self.evaluation_requests += metrics["evaluation_requests"]
@@ -473,11 +483,16 @@ class QueueAwareLaggedPUEKnownQueue(QueueAwareLaggedPUE):
         self.known_queue_extra_calls = 0
         self.known_queue_projection_seconds = 0.0
         self.known_queue_positive_penalty_calls = 0
+        self.known_queue_selected_penalty_minutes = 0.0
+        self.known_queue_selected_positive_batches = 0
+        self.known_queue_selected_decisions = 0
         self._known_queue_reference = {}
+        self._known_queue_candidate_penalties = {}
 
     def select_batch(self, tasks, datacenters):
         # A cached baseline may only be reused within one decision epoch.
         self._known_queue_reference = {}
+        self._known_queue_candidate_penalties = {}
         return super().select_batch(tasks, datacenters)
 
     def _known_queue_penalty(self, dcs, proposed_arrivals, now):
