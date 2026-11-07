@@ -36,7 +36,7 @@ from research.task_sla_audit import analyze_finished_tasks
 from research.sla_carbon_policy import SLAFeasibleCarbonPolicy
 from research.nsga2_batch_policy import NSGA2BatchPolicy
 from research.lagged_pue_risk_policy import QueueAwareLaggedPUEShadowGuard
-from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareIndexedTransit, QueueAwareLaggedPUE, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk, QueueAwareFrontCarbonTaskwise
+from research.queue_aware_nsga2 import QueueAwareFull, QueueAblationNoQueue, QueueAblationNoTransferCost, QueueAwareCarbonGuard, QueueAwareCarbonSlaGuard, QueueAwareWithTransit, QueueAwareIndexedTransit, QueueAwareLaggedPUE, QueueAwareLaggedPUEFrontTaskwise, QueueAwareCongestionAdaptive, QueueAwareFrontCarbonRisk, QueueAwareFrontCarbonTaskwise
 from utils.task_assignment_strategies import (
     DistributeRoundRobin, DistributeLowestCarbon, DistributeLowestPrice,
     DistributeMostAvailable, DistributeLeastPending,
@@ -59,6 +59,7 @@ POLICIES = {
     "queue_nsga2_with_transit": QueueAwareWithTransit,
     "queue_nsga2_indexed_transit": QueueAwareIndexedTransit,
     "queue_nsga2_lagged_pue": QueueAwareLaggedPUE,
+    "queue_nsga2_lagged_pue_front_taskwise": QueueAwareLaggedPUEFrontTaskwise,
     "queue_nsga2_lagged_pue_shadow_guard": QueueAwareLaggedPUEShadowGuard,
     "queue_nsga2_adaptive_transit": QueueAwareCongestionAdaptive,
     "queue_nsga2_front_carbon_risk": QueueAwareFrontCarbonRisk,
