@@ -456,6 +456,21 @@ class QueueAwareLaggedPUE(QueueAwareIndexedTransit):
         return self._lagged_pue.get(dc_id, 1.0)
 
 
+class QueueAwareLaggedPUEFrontTaskwise(QueueAwareLaggedPUE):
+    """Single-search PUE variant: cached-front taskwise finish constraint.
+
+    The reference here is the SAME PUE search's knee, not an independent
+    PUE-blind baseline; this is not a guarantee of realized SLA safety.
+    """
+
+    front_carbon_taskwise_enabled = True
+
+    def reset(self):
+        super().reset()
+        self.front_carbon_selection_checks = 0
+        self.front_carbon_selection_changes = 0
+
+
 def relevant_transit_competition(dc, arrivals, now, pending_transit):
     """Check whether observed incoming transfers *could* change batch starts.
 
