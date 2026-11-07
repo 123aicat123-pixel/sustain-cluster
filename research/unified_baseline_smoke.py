@@ -326,6 +326,9 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         summary["known_queue_extra_calls"] = getattr(policy, "known_queue_extra_calls", 0)
         summary["known_queue_projection_seconds"] = getattr(policy, "known_queue_projection_seconds", 0.0)
         summary["known_queue_positive_penalty_calls"] = getattr(policy, "known_queue_positive_penalty_calls", 0)
+        summary["known_queue_selected_penalty_minutes"] = getattr(policy, "known_queue_selected_penalty_minutes", 0.0)
+        summary["known_queue_selected_positive_batches"] = getattr(policy, "known_queue_selected_positive_batches", 0)
+        summary["known_queue_selected_decisions"] = getattr(policy, "known_queue_selected_decisions", 0)
         summary["shadow_evaluation_requests"] = getattr(policy, "shadow_evaluation_requests", 0)
         summary["shadow_surrogate_evaluations"] = getattr(policy, "shadow_surrogate_evaluations", 0)
         summary["total_nsga2_evaluation_requests"] = summary["nsga2_evaluation_requests"] + summary["shadow_evaluation_requests"]
