@@ -316,6 +316,8 @@ class QueueAwareNSGA2Policy(NSGA2BatchPolicy):
                 delay = (predicted_finish-task.sla_deadline).total_seconds()/60
                 tardiness += max(0.0, delay)
                 missed_deadlines += int(delay > 1e-9)
+            if getattr(self, "known_queue_externality_enabled", False):
+                tardiness += self._known_queue_penalty(dcs, arrivals, now)
             predicted_miss_counts[tuple(chrom)] = missed_deadlines
             predicted_finishes[tuple(chrom)] = tuple(finishes)
             return cost, carbon, tardiness
@@ -454,6 +456,73 @@ class QueueAwareLaggedPUE(QueueAwareIndexedTransit):
 
     def _facility_carbon_factor(self, dc_id):
         return self._lagged_pue.get(dc_id, 1.0)
+
+
+class QueueAwareLaggedPUEKnownQueue(QueueAwareLaggedPUE):
+    """Add currently committed queue tardiness to ONE online GA fitness.
+
+    Extra observational predictions can increase CPU wall time; no future
+    arrivals, counterfactual physical carbon or downstream SLA are known.
+    """
+
+    known_queue_externality_enabled = True
+
+    def reset(self):
+        super().reset()
+        self.known_queue_baseline_calls = 0
+        self.known_queue_extra_calls = 0
+        self.known_queue_projection_seconds = 0.0
+        self.known_queue_positive_penalty_calls = 0
+        self._known_queue_reference = {}
+
+    def select_batch(self, tasks, datacenters):
+        # A cached baseline may only be reused within one decision epoch.
+        self._known_queue_reference = {}
+        return super().select_batch(tasks, datacenters)
+
+    def _known_queue_penalty(self, dcs, proposed_arrivals, now):
+        from research.known_queue_externality import (
+            known_queue_externality, project_tracked_starts
+        )
+        total = 0.0
+        for dc in dcs:
+            new = proposed_arrivals[dc.dc_id]
+            if not new:
+                continue
+            pending = tuple(dc.pending_tasks)
+            transit = tuple(self._pending_transit_by_dc.get(dc.dc_id, ()))
+            if not pending and not transit:
+                continue
+            if dc.dc_id not in self._known_queue_reference:
+                began = time.perf_counter()
+                try:
+                    reference = project_tracked_starts(
+                        dc, [(task, max(now, arrival)) for arrival, task in transit],
+                        now, tracked=pending
+                    )
+                finally:
+                    self.known_queue_projection_seconds += (
+                        time.perf_counter() - began
+                    )
+                    self.known_queue_baseline_calls += 1
+                self._known_queue_reference[dc.dc_id] = reference
+            began = time.perf_counter()
+            try:
+                effect = known_queue_externality(
+                    dc, new, now, transit,
+                    baseline_starts=self._known_queue_reference[dc.dc_id],
+                )
+            finally:
+                self.known_queue_extra_calls += 1
+                self.known_queue_projection_seconds += (
+                    time.perf_counter() - began
+                )
+            penalty = float(effect["known_added_tardiness_minutes"])
+            if penalty < 0 or not math.isfinite(penalty):
+                raise AssertionError("invalid known-queue tardiness")
+            total += penalty
+            self.known_queue_positive_penalty_calls += int(penalty > 0)
+        return total
 
 
 class QueueAwareLaggedPUEFrontTaskwise(QueueAwareLaggedPUE):
