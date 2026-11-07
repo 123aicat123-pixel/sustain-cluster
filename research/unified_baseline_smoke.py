@@ -18,6 +18,7 @@ import random
 import time
 
 from research.planner_latency import summarize_dispatch_latency
+from research.calendar_index_guard import correct_overflowed_init_day
 from datetime import date
 import tempfile
 from pathlib import Path
@@ -140,6 +141,13 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
         assert env.single_action_mode is False
         assert env.disable_defer_action is False
         assert env.cluster_manager.strategy == "manual_rl"
+        # Upstream factory uses month*30.5+day for simulator-local site traces.
+        # Correct ONLY overflowed dates, preserving every previous benchmark.
+        site_index, site_index_corrected = correct_overflowed_init_day(
+            int(env.cluster_manager.init_day),
+            year=int(sim["year"]), month=int(sim["month"]), day=int(sim["init_day"]),
+        )
+        env.cluster_manager.init_day = site_index
         env.reset(seed=seed)
         # Prevent fresh admissions after a fixed horizon, without modifying
         # upstream data loaders or reward/environment physics. Drain can then
@@ -158,6 +166,8 @@ def run(policy_name, seed, steps, drain_steps=0, completed_records=None, cpu_cap
             "scenario_start_month": int(sim["month"]),
             "scenario_start_day": int(sim["init_day"]),
             "cpu_capacity_scale": cpu_capacity_scale,
+            "site_init_day_index": site_index,
+            "site_init_day_corrected": site_index_corrected,
             "admission_steps": steps, "drain_steps": drain_steps,
             "tasks_seen": 0, "tasks_dispatched": 0,
             "local_dispatches": 0, "remote_dispatches": 0,
